@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bible Explorer AI</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Bible Explorer AI</h1>
+            <p>Select a book and chapter to get an AI summary and illustrations</p>
+        </header>
+        
+        <div class="controls">
+            <select id="book-select">
+                <option value="">-- Select Book --</option>
+                <!-- Books will be added by JavaScript -->
+            </select>
+            
+            <select id="chapter-select">
+                <option value="">-- Select Chapter --</option>
+            </select>
+            
+            <button id="explore-btn">Explore</button>
+        </div>
+        
+        <div class="loading hidden">
+            <div class="spinner"></div>
+            <p>Generating summary and images...</p>
+        </div>
+        
+        <div id="results" class="hidden">
+            <div class="summary-section">
+                <h2 id="chapter-title"></h2>
+                <div id="summary-content"></div>
+            </div>
+            
+            <div class="images-section">
+                <h3>Visualizations</h3>
+                <div id="images-container" class="image-grid"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>
