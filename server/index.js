@@ -1,13 +1,28 @@
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const { OpenAI } = require('openai');
 
 const app = express();
 
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100
+});
+
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(limiter);
+
+// Request logging
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path}`);
+  next();
+});
 
 // Initialize OpenAI
 const openai = new OpenAI({
@@ -24,12 +39,18 @@ app.get('/api/summary/:book/:chapter', async (req, res) => {
   try {
     const { book, chapter } = req.params;
     
+    // Input validation
+    if (!book || !chapter || isNaN(chapter)) {
+      return res.status(400).json({ error: "Invalid book or chapter" });
+    }
+
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [{
         role: "user",
-        content: `Summarize ${book} chapter ${chapter} of the Bible in 3 paragraphs`
-      }]
+        content: `Summarize ${book} chapter ${chapter} of the Bible in 3 paragraphs with key lessons`
+      }],
+      temperature: 0.7
     });
 
     res.json({
@@ -39,7 +60,10 @@ app.get('/api/summary/:book/:chapter', async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: "AI summary failed" });
+    res.status(500).json({ 
+      error: "AI summary failed",
+      details: error.message 
+    });
   }
 });
 
