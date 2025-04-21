@@ -38,5 +38,5 @@ A full-stack web application that provides AI-generated summaries and 3D visuali
 ### Installation
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/bible-website.git
-   cd bible-website
+   git clone https://github.com/artasyaskar/Project.Bible-A
+   cd Project.Bible-A
