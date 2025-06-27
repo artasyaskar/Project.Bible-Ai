@@ -1,11 +1,12 @@
 {
-  "name": "bible-website-client",
+  "name": "bible-ai-project-root",
   "version": "1.0.0",
-  "description": "Frontend for Bible Explorer AI",
+  "private": true,
   "scripts": {
-    "start": "live-server public"  // Simple live-reload server
+    "vercel-build": "cd server && npm install",
+    "start": "cd server && npm start"
   },
-  "devDependencies": {
-    "live-server": "^1.2.2"       // Lightweight dev server
+  "engines": {
+    "node": "18.x"
   }
 }
