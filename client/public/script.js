@@ -77,6 +77,144 @@ const chapterTitle = document.getElementById('chapter-title');
 const summaryContent = document.getElementById('summary-content');
 const imagesContainer = document.getElementById('images-container');
 
+// Daily Summary DOM elements
+const dailySummaryContainer = document.getElementById('daily-summary-container');
+const dailySummaryLoading = document.getElementById('daily-summary-loading');
+const dailySummaryContent = document.getElementById('daily-summary-content');
+const dailySummaryTitle = document.getElementById('daily-summary-title');
+const dailySummaryText = document.getElementById('daily-summary-text');
+const dailySummaryError = document.getElementById('daily-summary-error');
+
+// Search DOM elements
+const searchInput = document.getElementById('search-input');
+const searchBtn = document.getElementById('search-btn');
+const clearSearchBtn = document.getElementById('clear-search-btn');
+
+// Store original content to revert highlights
+let originalSummaryContent = '';
+let originalDailySummaryText = '';
+
+// Function to fetch and display daily summary
+async function fetchAndDisplayDailySummary() {
+    try {
+        dailySummaryLoading.classList.remove('hidden');
+        dailySummaryContent.classList.add('hidden');
+        dailySummaryError.classList.add('hidden');
+
+        const response = await fetch('/api/daily-summary');
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Failed to fetch daily summary');
+        }
+        const data = await response.json();
+
+        dailySummaryTitle.textContent = `${data.book} Chapter ${data.chapter}`;
+        // Assuming summary is plain text, wrap in <p> if not already structured
+        dailySummaryText.innerHTML = `<p>${data.summary.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>`;
+        originalDailySummaryText = dailySummaryText.innerHTML; // Store clean version
+        
+        dailySummaryContent.classList.remove('hidden');
+    } catch (error) {
+        console.error('Daily Summary Error:', error);
+        dailySummaryError.textContent = `Could not load today's summary: ${error.message}`;
+        dailySummaryError.classList.remove('hidden');
+    } finally {
+        dailySummaryLoading.classList.add('hidden');
+    }
+}
+
+// --- Search Functionality ---
+
+function highlightInElement(element, query) {
+    if (!element || !query) return false;
+
+    const innerHTML = element.innerHTML;
+    const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    
+    // Simple check if query exists before complex replacement
+    if (!innerHTML.match(regex)) {
+        return false; 
+    }
+
+    // This is a simplified highlight that might break complex HTML structures.
+    // For simple <p>text</p> structures, it should be okay.
+    // A more robust solution would involve traversing text nodes.
+    const newHTML = innerHTML.replace(regex, '<span class="highlight">$1</span>');
+    
+    if (newHTML !== innerHTML) {
+        element.innerHTML = newHTML;
+        return true;
+    }
+    return false;
+}
+
+function clearHighlights() {
+    if (originalSummaryContent) {
+        summaryContent.innerHTML = originalSummaryContent;
+    }
+    if (originalDailySummaryText) {
+        dailySummaryText.innerHTML = originalDailySummaryText;
+    }
+    // Remove any stray highlight spans if original content wasn't stored or is empty
+    const highlights = document.querySelectorAll('.highlight');
+    highlights.forEach(span => {
+        // Replace span with its text content
+        span.outerHTML = span.innerHTML; 
+    });
+}
+
+
+searchBtn.addEventListener('click', () => {
+    const query = searchInput.value.trim();
+    if (!query) {
+        clearHighlights(); // Clear if query is empty
+        return;
+    }
+
+    // Store original content before highlighting, if not already stored or if content changed
+    if (!originalSummaryContent || summaryContent.innerHTML !== originalSummaryContent.replace(/<span class="highlight">(.*?)<\/span>/gi, '$1')) {
+        originalSummaryContent = summaryContent.innerHTML.replace(/<span class="highlight">(.*?)<\/span>/gi, '$1');
+    }
+    if (!originalDailySummaryText || dailySummaryText.innerHTML !== originalDailySummaryText.replace(/<span class="highlight">(.*?)<\/span>/gi, '$1')) {
+        originalDailySummaryText = dailySummaryText.innerHTML.replace(/<span class="highlight">(.*?)<\/span>/gi, '$1');
+    }
+    
+    clearHighlights(); // Clear previous highlights before applying new ones
+
+    let foundInMain = false;
+    if (summaryContent.offsetParent !== null) { // Check if visible
+       foundInMain = highlightInElement(summaryContent, query);
+    }
+
+    let foundInDaily = false;
+    if (dailySummaryText.offsetParent !== null) { // Check if visible
+        foundInDaily = highlightInElement(dailySummaryText, query);
+    }
+
+    if (!foundInMain && !foundInDaily) {
+        alert('Search term not found.');
+    }
+});
+
+clearSearchBtn.addEventListener('click', () => {
+    searchInput.value = '';
+    clearHighlights();
+    originalSummaryContent = ''; // Reset stored content
+    originalDailySummaryText = '';
+});
+
+searchInput.addEventListener('keyup', (event) => {
+    if (event.key === 'Enter') {
+        searchBtn.click();
+    }
+    if (searchInput.value.trim() === '') {
+        clearHighlights();
+        originalSummaryContent = ''; 
+        originalDailySummaryText = '';
+    }
+});
+
+
 // Populate book select
 bibleBooks.forEach(book => {
     const option = document.createElement('option');
@@ -138,6 +276,7 @@ exploreBtn.addEventListener('click', async function() {
             .split('\n\n')
             .map(p => `<p>${p}</p>`)
             .join('');
+        originalSummaryContent = summaryContent.innerHTML; // Store clean version
         
         // Handle images section
         const imagesSection = document.querySelector('.images-section');
@@ -159,4 +298,9 @@ exploreBtn.addEventListener('click', async function() {
         loadingDiv.classList.add('hidden');
         alert('An error occurred. Please try again.');
     }
+});
+
+// Initial calls when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    fetchAndDisplayDailySummary();
 });
