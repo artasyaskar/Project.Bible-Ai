@@ -1,8 +1,16 @@
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&family=Open+Sans:wght@400;600&display=swap');
+
 :root {
-    --primary-color: #3a5a78;
-    --secondary-color: #6c757d;
-    --light-color: #f8f9fa;
-    --dark-color: #343a40;
+    --primary-color: #6082B6; /* Softer Blue */
+    --secondary-color: #A7C7E7; /* Lighter Blue for accents */
+    --accent-color: #F5E8C7; /* Soft Gold/Beige */
+    --text-color: #333333; /* Dark Gray */
+    --light-text-color: #FFFFFF;
+    --background-color: #F4F6F8; /* Light Grayish Blue */
+    --content-background: #FFFFFF;
+    --border-color: #DEE2E6;
+    --shadow-color: rgba(0, 0, 0, 0.08);
+    --hover-primary-color: #5072A0; /* Darker shade of primary for hover */
 }
 
 * {
@@ -12,70 +20,94 @@
 }
 
 body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    line-height: 1.6;
-    color: var(--dark-color);
-    background-color: #f5f5f5;
+    font-family: 'Open Sans', sans-serif;
+    line-height: 1.7;
+    color: var(--text-color);
+    background-color: var(--background-color);
     padding: 20px;
+    transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 .container {
-    max-width: 1200px;
-    margin: 0 auto;
-    background-color: white;
-    padding: 30px;
-    border-radius: 10px;
-    box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+    max-width: 1100px; /* Slightly reduced for a more contained feel */
+    margin: 20px auto; /* Added top/bottom margin */
+    background-color: var(--content-background);
+    padding: 30px 40px; /* Increased padding */
+    border-radius: 12px; /* Softer radius */
+    box-shadow: 0 8px 25px var(--shadow-color); /* Softer shadow */
+    transition: box-shadow 0.3s ease;
 }
 
 header {
     text-align: center;
-    margin-bottom: 30px;
+    margin-bottom: 40px; /* Increased margin */
+    border-bottom: 1px solid var(--border-color); /* Subtle separator */
+    padding-bottom: 20px;
 }
 
 header h1 {
+    font-family: 'Montserrat', sans-serif;
     color: var(--primary-color);
-    margin-bottom: 10px;
+    font-weight: 700; /* Bolder heading */
+    font-size: 2.5em; /* Larger heading */
+    margin-bottom: 8px; /* Adjusted spacing */
+}
+
+header p {
+    font-size: 1.1em;
+    color: #555; /* Slightly lighter than main text */
 }
 
 .controls {
     display: flex;
-    gap: 10px;
-    margin-bottom: 30px;
+    gap: 15px; /* Increased gap */
+    margin-bottom: 40px; /* Increased margin */
     flex-wrap: wrap;
+    align-items: center; /* Vertically align items */
 }
 
 select, button {
-    padding: 10px 15px;
-    border-radius: 5px;
-    border: 1px solid #ddd;
-    font-size: 16px;
+    padding: 12px 18px; /* Increased padding */
+    border-radius: 8px; /* Softer radius */
+    border: 1px solid var(--border-color);
+    font-size: 1em; /* Relative font size */
+    font-family: 'Open Sans', sans-serif;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+select:focus, button:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(96, 130, 182, 0.25); /* Focus ring */
 }
 
 button {
     background-color: var(--primary-color);
-    color: white;
+    color: var(--light-text-color);
     border: none;
     cursor: pointer;
-    transition: background-color 0.3s;
+    font-weight: 600; /* Bolder button text */
+    transition: background-color 0.3s ease, transform 0.2s ease;
 }
 
 button:hover {
-    background-color: #2c4762;
+    background-color: var(--hover-primary-color);
+    transform: translateY(-2px); /* Subtle lift on hover */
 }
 
 .loading {
     text-align: center;
-    margin: 30px 0;
+    margin: 40px 0; /* Increased margin */
+    color: var(--primary-color); /* Match primary color */
 }
 
 .spinner {
-    border: 5px solid #f3f3f3;
-    border-top: 5px solid var(--primary-color);
+    border: 6px solid var(--secondary-color); /* Lighter border for spinner */
+    border-top: 6px solid var(--primary-color); /* Primary color for moving part */
     border-radius: 50%;
-    width: 50px;
-    height: 50px;
-    animation: spin 1s linear infinite;
+    width: 60px; /* Larger spinner */
+    height: 60px;
+    animation: spin 1.2s linear infinite; /* Slightly slower spin */
     margin: 0 auto 20px;
 }
 
@@ -85,7 +117,12 @@ button:hover {
 }
 
 .hidden {
-    display: none;
+    display: none !important; /* Ensure it overrides other display properties */
+}
+
+#results {
+    border-top: 1px solid var(--border-color);
+    padding-top: 30px;
 }
 
 .summary-section {
@@ -93,38 +130,125 @@ button:hover {
 }
 
 .summary-section h2 {
+    font-family: 'Montserrat', sans-serif;
     color: var(--primary-color);
-    margin-bottom: 15px;
+    font-size: 1.8em; /* Adjusted size */
+    margin-bottom: 20px; /* Increased margin */
+    border-bottom: 2px solid var(--secondary-color); /* Underline effect */
+    padding-bottom: 10px;
 }
 
 .summary-section p {
-    margin-bottom: 15px;
-    text-align: justify;
+    margin-bottom: 1.2em; /* Relative margin */
+    text-align: left; /* Standard text alignment */
+    line-height: 1.8; /* Increased line height for readability */
+    font-size: 1.05em;
 }
 
 .images-section h3 {
+    font-family: 'Montserrat', sans-serif;
     color: var(--primary-color);
-    margin-bottom: 20px;
+    font-size: 1.6em; /* Adjusted size */
+    margin-bottom: 25px; /* Increased margin */
+    border-bottom: 2px solid var(--secondary-color);
+    padding-bottom: 10px;
 }
 
 .image-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); /* Slightly smaller min size */
+    gap: 25px; /* Increased gap */
 }
 
 .image-grid img {
     width: 100%;
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    transition: transform 0.3s;
+    border-radius: 10px; /* Softer radius */
+    box-shadow: 0 6px 12px var(--shadow-color); /* Softer shadow */
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    border: 1px solid var(--border-color); /* Subtle border */
 }
 
 .image-grid img:hover {
-    transform: scale(1.03);
+    transform: scale(1.05); /* Slightly more pronounced hover */
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12); /* Enhanced shadow on hover */
 }
 
+/* Daily Summary Section Styles */
+.daily-summary-section {
+    background-color: var(--secondary-color); /* Light blue background */
+    color: var(--text-color);
+    padding: 25px;
+    margin-bottom: 40px;
+    border-radius: 10px;
+    box-shadow: 0 6px 15px var(--shadow-color);
+}
+
+.daily-summary-section h2 {
+    font-family: 'Montserrat', sans-serif;
+    color: var(--primary-color); /* Use primary color for heading */
+    font-size: 1.8em;
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+.daily-summary-section #daily-summary-content p {
+    font-size: 1em;
+    line-height: 1.7;
+    color: var(--text-color); /* Ensure good contrast */
+}
+
+/* Search Controls Styles */
+.search-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 30px;
+    align-items: center;
+}
+
+.search-controls input[type="text"] {
+    flex-grow: 1;
+    padding: 12px 18px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    font-size: 1em;
+    font-family: 'Open Sans', sans-serif;
+}
+
+.search-controls input[type="text"]:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(96, 130, 182, 0.25);
+}
+
+.search-controls button {
+    /* Styles are inherited from global button styles, which is good */
+    /* Add specific overrides if needed */
+    padding: 12px 18px; /* Ensure consistent padding */
+}
+
+/* Highlight Style */
+.highlight {
+    background-color: var(--accent-color); /* Using accent color for highlight */
+    color: #333; /* Ensure good contrast on highlight */
+    padding: 0.1em 0; /* Small padding for visual separation */
+    border-radius: 3px;
+    font-weight: bold;
+}
+
+
 @media (max-width: 768px) {
+    .container {
+        padding: 20px;
+        margin: 10px;
+    }
+
+    header h1 {
+        font-size: 2em;
+    }
+    header p {
+        font-size: 1em;
+    }
+
     .controls {
         flex-direction: column;
     }
@@ -134,6 +258,22 @@ button:hover {
     }
     
     .image-grid {
-        grid-template-columns: 1fr;
+        grid-template-columns: 1fr; /* Single column for smaller screens */
+    }
+
+    .summary-section h2, .images-section h3, .daily-summary-section h2 {
+        font-size: 1.5em;
+    }
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 10px;
+    }
+    .container {
+        padding: 15px;
+    }
+    header h1 {
+        font-size: 1.8em;
     }
 }
