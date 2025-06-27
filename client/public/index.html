@@ -12,6 +12,19 @@
             <h1>Bible Explorer AI</h1>
             <p>Select a book and chapter to get an AI summary and illustrations</p>
         </header>
+
+        <div class="daily-summary-section" id="daily-summary-container">
+            <h2>Summary for Today</h2>
+            <div class="loading" id="daily-summary-loading">
+                <div class="spinner"></div>
+                <p>Fetching today's insight...</p>
+            </div>
+            <div id="daily-summary-content" class="hidden">
+                <h3 id="daily-summary-title"></h3>
+                <div id="daily-summary-text"></div>
+            </div>
+            <p id="daily-summary-error" class="hidden" style="color: red; text-align: center;"></p>
+        </div>
         
         <div class="controls">
             <select id="book-select">
@@ -24,6 +37,12 @@
             </select>
             
             <button id="explore-btn">Explore</button>
+        </div>
+
+        <div class="search-controls">
+            <input type="text" id="search-input" placeholder="Search within summaries...">
+            <button id="search-btn">Search</button>
+            <button id="clear-search-btn">Clear</button>
         </div>
         
         <div class="loading hidden">
