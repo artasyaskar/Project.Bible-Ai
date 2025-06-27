@@ -118,7 +118,7 @@ exploreBtn.addEventListener('click', async function() {
     resultsDiv.classList.add('hidden');
     
     try {
-        const response = await fetch(`http://localhost:3000/api/summarize`, {
+        const response = await fetch(`/api/summarize`, { // Changed to relative path
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -139,9 +139,17 @@ exploreBtn.addEventListener('click', async function() {
             .map(p => `<p>${p}</p>`)
             .join('');
         
-        imagesContainer.innerHTML = data.images
-            .map(url => `<img src="${url}" alt="Bible illustration">`)
-            .join('');
+        // Handle images section
+        const imagesSection = document.querySelector('.images-section');
+        if (data.images && data.images.length > 0) {
+            imagesContainer.innerHTML = data.images
+                .map(url => `<img src="${url}" alt="Bible illustration">`)
+                .join('');
+            imagesSection.classList.remove('hidden');
+        } else {
+            imagesContainer.innerHTML = ''; // Clear any previous images
+            imagesSection.classList.add('hidden'); // Hide images section if no images
+        }
         
         // Hide loading, show results
         loadingDiv.classList.add('hidden');
