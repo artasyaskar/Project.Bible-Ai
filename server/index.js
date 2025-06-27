@@ -35,12 +35,14 @@ app.get('/', (req, res) => {
 });
 
 // Bible summary endpoint
-app.get('/api/summary/:book/:chapter', async (req, res) => {
+app.post('/api/summarize', async (req, res) => {
   try {
-    const { book, chapter } = req.params;
+    const { book, chapter } = req.body; // Changed from req.params
     
     // Input validation
-    if (!book || !chapter || isNaN(chapter)) {
+    // Ensure chapter is a number if it's passed as a string from the client
+    const chapterNumber = parseInt(chapter, 10);
+    if (!book || !chapter || isNaN(chapterNumber)) {
       return res.status(400).json({ error: "Invalid book or chapter" });
     }
 
