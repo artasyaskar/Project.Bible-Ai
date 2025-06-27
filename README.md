@@ -11,17 +11,14 @@ A full-stack web application that provides AI-generated summaries and 3D visuali
 ## Features ✨
 
 - 📖 Select any book and chapter from the Bible
-- 🤖 AI-powered chapter summaries (using GPT-4)
-- 🖼️ 4-6 generated 3D images per chapter (DALL·E 3)
+- 🤖 AI-powered chapter summaries (using gpt-3.5-turbo)
 - 📱 Responsive design for all devices
-- ⚡ Fast performance with Vite.js
+- (Future Feature) 🖼️ Generated 3D images per chapter (e.g., using DALL·E)
 
 ## Tech Stack 🛠️
 
 **Frontend:**
-- HTML5, CSS3, JavaScript
-- Vite.js (Build Tool)
-- Axios (HTTP Client)
+- HTML5, CSS3, JavaScript (using native `fetch` API)
 
 **Backend:**
 - Node.js
