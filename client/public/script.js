@@ -96,15 +96,27 @@ let originalDailySummaryText = '';
 
 // Function to fetch and display daily summary
 async function fetchAndDisplayDailySummary() {
+    let response; // Define response here to access it in catch if needed
     try {
         dailySummaryLoading.classList.remove('hidden');
         dailySummaryContent.classList.add('hidden');
         dailySummaryError.classList.add('hidden');
 
-        const response = await fetch('/api/daily-summary');
+        response = await fetch('/api/daily-summary'); // Assign to outer scope variable
+
         if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'Failed to fetch daily summary');
+            let errorData;
+            // Check content type before trying to parse as JSON
+            const contentType = response.headers.get("content-type");
+            if (contentType && contentType.includes("application/json")) {
+                errorData = await response.json();
+                throw new Error(errorData.error || `Server error: ${response.status}`);
+            } else {
+                // If not JSON, throw a generic error with status text
+                const responseText = await response.text(); // Get the text for logging
+                console.error("Server returned non-JSON error:", responseText);
+                throw new Error(`Server returned an unexpected response: ${response.status} ${response.statusText}`);
+            }
         }
         const data = await response.json();
 
@@ -115,8 +127,18 @@ async function fetchAndDisplayDailySummary() {
         
         dailySummaryContent.classList.remove('hidden');
     } catch (error) {
-        console.error('Daily Summary Error:', error);
-        dailySummaryError.textContent = `Could not load today's summary: ${error.message}`;
+        console.error('Daily Summary Error Details:', error);
+        let displayMessage = error.message;
+
+        // If the error is due to JSON parsing of a non-JSON response, it's a SyntaxError.
+        if (error instanceof SyntaxError) {
+            displayMessage = "Failed to understand server's response. It might be temporarily unavailable.";
+            if (response) { // If response object exists
+                 displayMessage += ` (Status: ${response.status} ${response.statusText})`;
+            }
+        }
+        
+        dailySummaryError.textContent = `Could not load today's summary: ${displayMessage}`;
         dailySummaryError.classList.remove('hidden');
     } finally {
         dailySummaryLoading.classList.add('hidden');
@@ -265,7 +287,16 @@ exploreBtn.addEventListener('click', async function() {
         });
         
         if (!response.ok) {
-            throw new Error('Failed to fetch data');
+            let errorData;
+            const contentType = response.headers.get("content-type");
+            if (contentType && contentType.includes("application/json")) {
+                errorData = await response.json();
+                throw new Error(errorData.error || `Request failed: ${response.status} ${response.statusText}`);
+            } else {
+                const responseText = await response.text();
+                console.error("Server returned non-JSON error for /api/summarize:", responseText);
+                throw new Error(`Server returned an unexpected response: ${response.status} ${response.statusText}`);
+            }
         }
         
         const data = await response.json();
@@ -294,13 +325,57 @@ exploreBtn.addEventListener('click', async function() {
         loadingDiv.classList.add('hidden');
         resultsDiv.classList.remove('hidden');
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Error during explore:', error);
         loadingDiv.classList.add('hidden');
-        alert('An error occurred. Please try again.');
+        let displayMessage = error.message;
+        if (error instanceof SyntaxError) { // If JSON parsing failed
+            displayMessage = "Failed to understand server's response. It might be temporarily unavailable.";
+        }
+        alert(`An error occurred: ${displayMessage}. Please try again.`);
     }
 });
 
 // Initial calls when DOM is ready
+const themeToggleBtn = document.getElementById('theme-toggle-btn');
+
+// Function to set theme
+function setTheme(theme) {
+    if (theme === 'dark') {
+        document.body.classList.add('dark-mode');
+        themeToggleBtn.textContent = '☀️'; // Sun icon for light mode
+        localStorage.setItem('theme', 'dark');
+    } else {
+        document.body.classList.remove('dark-mode');
+        themeToggleBtn.textContent = '🌙'; // Moon icon for dark mode
+        localStorage.setItem('theme', 'light');
+    }
+}
+
+// Event listener for theme toggle button
+if (themeToggleBtn) { // Check if button exists, though it should
+    themeToggleBtn.addEventListener('click', () => {
+        if (document.body.classList.contains('dark-mode')) {
+            setTheme('light');
+        } else {
+            setTheme('dark');
+        }
+    });
+}
+
+
 document.addEventListener('DOMContentLoaded', () => {
+    // Apply saved theme or default to light
+    const savedTheme = localStorage.getItem('theme');
+    // If there's a saved theme, use it. Otherwise, check system preference.
+    // Default to 'light' if no preference or saved theme.
+    let currentTheme = 'light'; // Default theme
+
+    if (savedTheme) {
+        currentTheme = savedTheme;
+    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        currentTheme = 'dark'; // Prefer system dark mode if no explicit choice saved
+    }
+    setTheme(currentTheme);
+
     fetchAndDisplayDailySummary();
 });
