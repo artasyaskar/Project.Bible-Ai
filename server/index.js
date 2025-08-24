@@ -18,7 +18,8 @@ Rules:
 - Preserve verse markers like (12), (1), etc.
 - Preserve citation tokens like v1, v2–4 exactly.
 - Do NOT add commentary. Return only the translated text.
-- If the target language is Urdu, strictly use "یسوع" for Jesus and never "عیسیٰ" (or any of its variants). Replace any such occurrences with "یسوع".
+- If the target language is Urdu: strictly use "یسوع" for Jesus (never "عیسیٰ") and "یوحنا" for John (never "یحییٰ" or similar). Replace any such occurrences accordingly.
+- Perspective and terminology: use a strictly Christian background and avoid Islamic/Muslim terminology or titles.
 
 Text:
 ${text}`;
@@ -27,16 +28,24 @@ ${text}`;
   return /urdu/i.test(targetLang) ? enforceUrduJesus(result) : result;
 }
 
-// Enforce Urdu naming preference: always use "یسوع" instead of variants of "عیسیٰ"
+// Enforce Urdu naming preferences: always use "یسوع" for Jesus and "یوحنا" for John
 function enforceUrduJesus(input) {
   if (!input || typeof input !== 'string') return input;
   // Common variants with/without diacritics and small alef
   const patterns = [
+    // Jesus
     /عِ?ی\s?س\s?ی(?:ٰ|ٗ|ِ|ُ|ْ|ّ)?/g, // covers عیسی, عِیسی, عیسیٰ and minor diacritics/spaces
-    /عیسٰی/g
+    /عیسٰی/g,
+    // John (Yahya variants -> Yohanna)
+    /یح(?:ی|ي)ی(?:ٰ|ٗ|ِ|ُ|ْ|ّ)?/g, // یحیی, یحيي, یحییٰ
+    /یحیا/g, // یحیا
+    /يحيى/g // Arabic form
   ];
   let out = input;
-  for (const rx of patterns) out = out.replace(rx, 'یسوع');
+  // First replace Jesus variants
+  out = out.replace(/(?:عِ?ی\s?س\s?ی(?:ٰ|ٗ|ِ|ُ|ْ|ّ)?|عیسٰی)/g, 'یسوع');
+  // Then replace John variants
+  out = out.replace(/(?:یح(?:ی|ي)ی(?:ٰ|ٗ|ِ|ُ|ْ|ّ)?|یحیا|يحيى)/g, 'یوحنا');
   return out;
 }
 
@@ -289,7 +298,7 @@ app.post('/api/summarize', async (req, res) => {
     }
 
     // Check cache first (include cache version to invalidate old summaries)
-    const CACHE_VERSION = 'v2';
+    const CACHE_VERSION = 'v3';
     const cacheKey = `${CACHE_VERSION}|${normalizedBook}|${chapterNumber}|${translation.toLowerCase()}`;
     const cached = global.__chapterSummaryCache.get(cacheKey);
     if (cached && (Date.now() - cached.timestamp) < CHAPTER_CACHE_TTL_MS) {
@@ -314,7 +323,7 @@ app.post('/api/summarize', async (req, res) => {
       const passage = await fetchBibleText(normalizedBook, chapterNumber, translation);
 
       // Grounded prompt with strict instructions (English output)
-      const prompt = `You are summarizing a Bible passage for a Christian audience. Use ONLY the passage text provided below.\n\n- Do NOT invent any content.\n- If you are unsure, say so.\n- Include verse citations using the format v<number> or v<number>-<number> referencing ONLY verses that exist in this chapter.\n- Keep 1–3 concise paragraphs focused on the main themes and lessons.\n- Translation: ${passage.meta.translation}.\n\nPassage: ${normalizedBook} ${chapterNumber}\n${passage.passageText}`;
+      const prompt = `You are summarizing a Bible passage for a Christian audience. Use ONLY the passage text provided below.\n\n- Do NOT invent any content.\n- If you are unsure, say so.\n- Include verse citations using the format v<number> or v<number>-<number> referencing ONLY verses that exist in this chapter.\n- Keep 1–3 concise paragraphs focused on the main themes and lessons.\n- Translation: ${passage.meta.translation}.\n- Perspective and terminology: use a strictly Christian background and avoid Islamic/Muslim terminology or titles.\n\nPassage: ${normalizedBook} ${chapterNumber}\n${passage.passageText}`;
 
       let summary = await generateWithGemini(prompt, { temperature: 0.2, maxOutputTokens: 320 });
 
@@ -380,7 +389,7 @@ app.get('/api/daily-summary', async (req, res) => {
     const force = String(req.query.force || '').toLowerCase() === 'true';
     const today = new Date();
     const dateKey = today.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
-    const CACHE_VERSION = 'v2';
+    const CACHE_VERSION = 'v3';
     const cacheKey = `${CACHE_VERSION}|${dateKey}|${translation.toLowerCase()}`;
 
     // Serve from cache if fresh (unless force refresh is requested)
@@ -413,7 +422,7 @@ app.get('/api/daily-summary', async (req, res) => {
 
       // Fetch text and summarize
       const passage = await fetchBibleText(book, chapter, translation);
-      const prompt = `Provide a concise, 1–2 paragraph daily insight strictly based on the passage below. Do NOT invent content. Include 0–2 verse citations using v<number> that exist in this chapter. Translation: ${passage.meta.translation}.\n\nPassage: ${book} ${chapter}\n${passage.passageText}`;
+      const prompt = `Provide a concise, 1–2 paragraph daily insight strictly based on the passage below. Do NOT invent content. Include 0–2 verse citations using v<number> that exist in this chapter. Translation: ${passage.meta.translation}.\n- Perspective and terminology: use a strictly Christian background and avoid Islamic/Muslim terminology or titles.\n\nPassage: ${book} ${chapter}\n${passage.passageText}`;
       // To reduce API usage, attempt only once; skip validation retry for daily
       let summary = await generateWithGemini(prompt, { temperature: 0.2, maxOutputTokens: 220 });
       const citations = extractCitations(summary, passage.verses);
