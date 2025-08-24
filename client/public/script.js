@@ -483,8 +483,8 @@ searchInput.addEventListener('keyup', (event) => {
 // Populate book select with Testament grouping
 if (bookSelect) {
     // First 39 books are Old Testament (Genesis .. Malachi)
-    const otBooks = bibleBooks.slice(0, 40);
-    const ntBooks = bibleBooks.slice(40);
+    const otBooks = bibleBooks.slice(0, 39);
+    const ntBooks = bibleBooks.slice(39);
 
     const otGroup = document.createElement('optgroup');
     otGroup.label = 'Old Testament';
