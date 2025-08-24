@@ -8,61 +8,101 @@
 </head>
 <body>
     <div class="container">
+        <div class="ay-owner ay-owner-fixed" aria-label="Project author">
+            <span class="ay-badge" title="Built by Artas Yaskar" tabindex="0" aria-label="Built by Artas Yaskar">AY</span>
+            <span class="ay-text" role="tooltip">Built by Artas Yaskar</span>
+        </div>
         <header>
             <button id="theme-toggle-btn" class="theme-toggle-btn" aria-label="Toggle theme">🌙</button>
             <h1>Bible Explorer AI</h1>
             <p>Select a book and chapter to get an AI summary and illustrations</p>
         </header>
 
-        <div class="daily-summary-section" id="daily-summary-container">
-            <h2>Summary for Today</h2>
-            <div class="loading" id="daily-summary-loading">
-                <div class="spinner"></div>
-                <p>Fetching today's insight...</p>
-            </div>
-            <div id="daily-summary-content" class="hidden">
-                <h3 id="daily-summary-title"></h3>
-                <div id="daily-summary-text"></div>
-            </div>
-            <p id="daily-summary-error" class="hidden" style="color: red; text-align: center;"></p>
+        <div class="daily-summary-section" id="daily-summary-container" aria-live="polite">
+            <section class="daily-summary-section" aria-labelledby="daily-summary-title">
+                <h2 id="daily-summary-title">Summary for Today</h2>
+                <div style="margin: 6px 0 10px 0;">
+                    <button id="daily-summary-refresh" class="secondary" style="font-size:0.9em;" aria-label="Refresh daily summary">Refresh</button>
+                </div>
+                <div id="daily-summary-loading" class="loading hidden" aria-live="polite">Loading daily summary...</div>
+                <div id="daily-summary-error" class="error hidden" role="alert"></div>
+                <div id="daily-summary-content" class="hidden">
+                    <div style="margin-bottom:8px;">
+                        <button id="daily-lang-en" class="secondary" aria-pressed="true">English</button>
+                        <button id="daily-lang-ur" class="secondary" aria-pressed="false">اردو</button>
+                    </div>
+                    <p id="daily-summary-text"></p>
+                    <p id="daily-summary-text-ur" class="hidden" dir="rtl" style="font-family: 'Noto Nastaliq Urdu', 'Noto Naskh Arabic', serif;"></p>
+                    <div id="daily-summary-citations" class="citations hidden" aria-live="polite"></div>
+                </div>
+                <button id="daily-summary-retry" class="hidden" aria-label="Retry loading daily summary">Retry</button>
+            </section>
         </div>
         
         <div class="controls">
-            <select id="book-select">
+            <label for="book-select" class="visually-hidden">Select Book</label>
+            <select id="book-select" aria-label="Select Book">
                 <option value="">-- Select Book --</option>
                 <!-- Books will be added by JavaScript -->
             </select>
             
-            <select id="chapter-select">
+            <label for="chapter-select" class="visually-hidden">Select Chapter</label>
+            <select id="chapter-select" aria-label="Select Chapter">
                 <option value="">-- Select Chapter --</option>
             </select>
+
+            <label for="translation-select" class="visually-hidden">Select Translation</label>
+            <select id="translation-select" aria-label="Select Translation">
+                <option value="kjv" selected>KJV (public domain)</option>
+                <!-- More translations can be added later (requires API keys) -->
+            </select>
             
-            <button id="explore-btn">Explore</button>
+            <button id="explore-btn" aria-label="Generate summary">Explore</button>
         </div>
 
         <div class="search-controls">
-            <input type="text" id="search-input" placeholder="Search within summaries...">
+            <label for="search-input" class="visually-hidden">Search within summaries</label>
+            <input type="text" id="search-input" placeholder="Search within summaries..." aria-label="Search within summaries">
             <button id="search-btn">Search</button>
             <button id="clear-search-btn">Clear</button>
         </div>
         
-        <div class="loading hidden">
+        <div class="loading hidden" role="status" aria-live="polite" aria-atomic="true">
             <div class="spinner"></div>
             <p>Generating summary and images...</p>
         </div>
         
-        <div id="results" class="hidden">
-            <div class="summary-section">
-                <h2 id="chapter-title"></h2>
-                <div id="summary-content"></div>
-            </div>
-            
-            <div class="images-section hidden"> <!-- Added hidden class -->
-                <h3>Visualizations</h3>
-                <div id="images-container" class="image-grid"></div>
-            </div>
+        <div id="results" class="hidden" aria-live="polite">
+            <section class="results-section" aria-labelledby="chapter-title">
+                <h2 id="chapter-title">Chapter Summary</h2>
+                <div class="loading hidden" aria-live="polite">Generating summary...</div>
+                <div id="results-content">
+                    <div style="margin-bottom:8px;">
+                        <button id="summary-lang-en" class="secondary" aria-pressed="true">English</button>
+                        <button id="summary-lang-ur" class="secondary" aria-pressed="false">اردو</button>
+                    </div>
+                    <div id="summary-content"></div>
+                    <div id="summary-content-ur" class="hidden" dir="rtl" style="font-family: 'Noto Nastaliq Urdu', 'Noto Naskh Arabic', serif;"></div>
+                    <div id="summary-citations" class="citations" aria-live="polite"></div>
+                    <div id="images-container" class="images"></div>
+                    <div style="margin-top:12px;">
+                        <button id="full-chapter-toggle" class="secondary" aria-expanded="false" aria-controls="full-chapter" style="display:none;">Show Full Chapter</button>
+                        <span id="full-chapter-lang" class="hidden" style="margin-left:8px;">
+                            <button id="full-chapter-lang-en" class="secondary" aria-pressed="true">English</button>
+                            <button id="full-chapter-lang-ur" class="secondary" aria-pressed="false">اردو</button>
+                        </span>
+                    </div>
+                    <div id="full-chapter" class="hidden" style="margin-top:10px;">
+                        <!-- Full chapter verses will be rendered here -->
+                    </div>
+                    <div id="full-chapter-ur" class="hidden" dir="rtl" style="margin-top:10px; font-family: 'Noto Nastaliq Urdu', 'Noto Naskh Arabic', serif;"></div>
+                </div>
+            </section>
         </div>
     </div>
+    <footer style="text-align:center; margin-top:12px; color:#777; font-size:0.9em;">
+        <span>Powered by Gemini | Bible Explorer AI</span>
+    </footer>
     
     <script src="script.js"></script>
 </body>
