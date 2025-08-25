@@ -189,50 +189,101 @@ const kv = createClient({
 
 // --- Persistent usage tracker using Vercel KV
 async function getUsage() {
+  const defaultUsage = () => ({
+    periodStart: getMonthStart(),
+    inputTokens: 0,
+    outputTokens: 0,
+    requests: 0,
+    lastUpdated: Date.now()
+  });
+
   try {
-    const usage = await kv.get('usage') || {
-      periodStart: getMonthStart(),
-      inputTokens: 0,
-      outputTokens: 0,
-      requests: 0
-    };
-    return usage;
+    let usage = await kv.get('usage');
+    
+    // If no usage data exists, initialize it
+    if (!usage) {
+      usage = defaultUsage();
+      await kv.set('usage', usage, { ex: 30 * 24 * 60 * 60 });
+      return usage;
+    }
+    
+    // Ensure all required fields exist
+    const now = Date.now();
+    const oneHour = 60 * 60 * 1000;
+    
+    // If data is too old (older than 1 hour), log a warning but still return it
+    if (now - (usage.lastUpdated || 0) > oneHour) {
+      console.warn('Usage data is older than 1 hour, consider checking KV store health');
+    }
+    
+    // Return merged with defaults in case some fields are missing
+    return { ...defaultUsage(), ...usage };
+    
   } catch (error) {
     console.error('KV get error:', error);
-    return {
-      periodStart: getMonthStart(),
-      inputTokens: 0,
-      outputTokens: 0,
-      requests: 0
-    };
+    // Return default values if there's an error
+    return defaultUsage();
   }
 }
 
 async function updateUsage(updates) {
-  try {
-    const current = await getUsage();
-    const nowStart = getMonthStart();
-    
-    // Reset if new month
-    if (current.periodStart !== nowStart) {
-      current.periodStart = nowStart;
-      current.inputTokens = 0;
-      current.outputTokens = 0;
-      current.requests = 0;
+  const LOCK_KEY = 'usage:lock';
+  const LOCK_TTL = 5; // 5 seconds lock
+  const MAX_RETRIES = 3;
+  let retries = 0;
+
+  while (retries < MAX_RETRIES) {
+    try {
+      // Try to acquire a lock to prevent concurrent updates
+      const lockAcquired = await kv.set(LOCK_KEY, '1', { nx: true, ex: LOCK_TTL });
+      if (!lockAcquired) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        retries++;
+        continue;
+      }
+
+      try {
+        // Get current usage with fresh data
+        const current = await getUsage();
+        const nowStart = getMonthStart();
+        
+        // Reset if new month
+        if (current.periodStart !== nowStart) {
+          current.periodStart = nowStart;
+          current.inputTokens = 0;
+          current.outputTokens = 0;
+          current.requests = 0;
+        }
+        
+        // Apply updates atomically
+        const updated = {
+          ...current,
+          inputTokens: (current.inputTokens || 0) + (updates.inputTokens || 0),
+          outputTokens: (current.outputTokens || 0) + (updates.outputTokens || 0),
+          requests: (current.requests || 0) + (updates.requests || 0),
+          lastUpdated: Date.now()
+        };
+        
+        // Save back to KV with 30-day TTL
+        await kv.set('usage', updated, { ex: 30 * 24 * 60 * 60 });
+        return updated;
+      } finally {
+        // Always release the lock
+        await kv.del(LOCK_KEY);
+      }
+    } catch (error) {
+      console.error('Error in updateUsage (attempt ' + (retries + 1) + '):', error);
+      retries++;
+      if (retries >= MAX_RETRIES) {
+        console.error('Max retries reached in updateUsage');
+        throw error;
+      }
+      // Exponential backoff
+      await new Promise(resolve => setTimeout(resolve, 100 * Math.pow(2, retries)));
     }
-    
-    // Apply updates
-    if (updates.inputTokens) current.inputTokens += updates.inputTokens;
-    if (updates.outputTokens) current.outputTokens += updates.outputTokens;
-    if (updates.requests) current.requests += updates.requests;
-    
-    // Save back to KV with 30-day TTL
-    await kv.set('usage', current, { ex: 30 * 24 * 60 * 60 });
-    return current;
-  } catch (error) {
-    console.error('KV set error:', error);
-    return null;
   }
+  
+  return null;
 }
 
 function getMonthStart(d = new Date()) {
@@ -344,27 +395,37 @@ async function generateWithGemini(prompt, { temperature = 0.7, maxOutputTokens }
 // Wrapper to track token usage per request
 async function trackAndGenerate(prompt, opts = {}) {
   let input = 0;
-  try {
-    input = await countTokens(prompt);
-  } catch (_) {
-    input = Math.ceil(String(prompt || '').length / 4);
-  }
-  
-  const text = await generateWithGemini(prompt, opts);
-  
   let output = 0;
+  let text;
+  
   try {
+    // Count input tokens
+    input = await countTokens(prompt);
+    
+    // Generate the response
+    text = await generateWithGemini(prompt, opts);
+    
+    // Count output tokens
     output = await countTokens(text);
-  } catch (_) {
-    output = Math.ceil(String(text || '').length / 4);
+  } catch (error) {
+    console.error('Error in trackAndGenerate:', error);
+    // Fallback to character-based estimation if token counting fails
+    if (input === 0) input = Math.ceil(String(prompt || '').length / 4);
+    if (!text) throw error; // Re-throw if we couldn't generate text
+    if (output === 0) output = Math.ceil(String(text).length / 4);
   }
   
   // Update usage in KV store
-  await updateUsage({
-    inputTokens: input,
-    outputTokens: output,
-    requests: 1
-  });
+  try {
+    await updateUsage({
+      inputTokens: input,
+      outputTokens: output,
+      requests: 1
+    });
+  } catch (error) {
+    console.error('Failed to update usage in KV store:', error);
+    // Don't fail the request if usage tracking fails
+  }
   
   return text;
 }
