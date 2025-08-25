@@ -9,6 +9,8 @@
     "node": "18.x"
   },
   "dependencies": {
+    "@google-cloud/billing": "^5.1.0",
+    "@vercel/kv": "^3.0.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.2.0"

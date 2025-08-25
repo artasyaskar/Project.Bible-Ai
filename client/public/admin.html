@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin • Token Usage</title>
+  <link rel="icon" href="/favicon.svg">
+  <style>
+    :root { --bg:#0f172a; --card:#111827; --text:#e5e7eb; --muted:#9ca3af; --accent:#22d3ee; --danger:#ef4444; --ok:#22c55e }
+    html,body{height:100%}
+    body{margin:0;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial; background:linear-gradient(160deg,#0b1224,#0c1428 40%,#0b1326 100%); color:var(--text)}
+    .wrap{max-width:880px;margin:40px auto;padding:0 16px}
+    .header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+    .title{font-weight:700;font-size:20px}
+    .card{background:rgba(17,24,39,.6); border:1px solid rgba(255,255,255,.06); box-shadow:0 10px 30px rgba(0,0,0,.45); border-radius:14px; padding:18px}
+    .row{display:flex;flex-wrap:wrap;gap:12px}
+    .kpi{flex:1 1 180px; background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.06); border-radius:12px; padding:14px}
+    .kpi h3{margin:0 0 6px;font-size:13px;color:var(--muted);font-weight:600}
+    .kpi .val{font-size:22px;font-weight:700}
+    .muted{color:var(--muted)}
+    .controls{display:flex;gap:8px;align-items:center}
+    input[type="password"], input[type="text"]{background:#0b1220;border:1px solid rgba(255,255,255,.08); color:var(--text); padding:10px 12px; border-radius:10px; outline:none; width:260px}
+    button{background:var(--accent); color:#00333a; border:none; padding:10px 14px; border-radius:10px; font-weight:700; cursor:pointer}
+    button.secondary{background:transparent;color:var(--text);border:1px solid rgba(255,255,255,.14)}
+    .warn{color:var(--danger); font-size:13px}
+    .ok{color:var(--ok)}
+    .alert-warning { background-color: rgba(239, 68, 68, 0.1); border-color: var(--danger) !important; }
+    .alert-info { background-color: rgba(34, 197, 94, 0.1); border-color: var(--ok) !important; }
+    .footer{margin-top:16px;color:var(--muted);font-size:12px}
+    .bar{height:8px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden}
+    .bar > span{display:block;height:100%;background:linear-gradient(90deg,#22d3ee,#22c55e)}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="title">Bible AI • Admin Usage</div>
+      <div class="controls">
+        <input id="key" type="password" placeholder="Admin key" />
+        <button id="load">Load</button>
+        <button id="bookmark" class="secondary">Bookmark with key</button>
+      </div>
+    </div>
+
+    <div class="card" id="status">
+      <div class="muted">Enter your admin key and click Load.</div>
+    </div>
+    
+    <div id="alert" class="card" style="margin-top: 12px; display: none; border-left: 4px solid transparent;">
+      <div id="alert-content"></div>
+    </div>
+
+    <div class="row" style="margin-top:12px">
+      <div class="kpi"><h3>Total tokens</h3><div class="val" id="total">–</div></div>
+      <div class="kpi"><h3>Input tokens</h3><div class="val" id="in">–</div></div>
+      <div class="kpi"><h3>Output tokens</h3><div class="val" id="out">–</div></div>
+      <div class="kpi"><h3>Requests</h3><div class="val" id="req">–</div></div>
+      <div class="kpi"><h3>Budget remaining</h3><div class="val" id="rem">–</div></div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="muted" id="period">—</div>
+      <div class="bar" style="margin-top:10px"><span id="prog" style="width:0%"></span></div>
+    </div>
+
+    <div class="footer">
+      Note: usage is tracked in-memory on this server instance. On serverless platforms, numbers may reset per cold start or instance.
+    </div>
+  </div>
+
+  <script>
+    const qs = new URLSearchParams(location.search);
+    const keyEl = document.getElementById('key');
+    const status = document.getElementById('status');
+    const alertEl = document.getElementById('alert');
+    const alertContent = document.getElementById('alert-content');
+    const totalEl = document.getElementById('total');
+    const inEl = document.getElementById('in');
+    const outEl = document.getElementById('out');
+    const reqEl = document.getElementById('req');
+    const remEl = document.getElementById('rem');
+    const progEl = document.getElementById('prog');
+    const periodEl = document.getElementById('period');
+
+    if (qs.get('key')) keyEl.value = qs.get('key');
+
+    function fmt(n){
+      if (n === null || n === undefined) return '–';
+      return Number(n).toLocaleString();
+    }
+
+    async function load(){
+      const key = keyEl.value.trim();
+      if (!key) { 
+        status.innerHTML = '<span class="warn">Admin key required.</span>'; 
+        return; 
+      }
+      
+      // Clear previous data
+      totalEl.textContent = '–';
+      inEl.textContent = '–';
+      outEl.textContent = '–';
+      reqEl.textContent = '–';
+      remEl.textContent = '–';
+      progEl.style.width = '0%';
+      periodEl.textContent = 'Loading...';
+      status.textContent = 'Connecting to server...';
+      
+      try {
+        const url = `/api/admin/usage?key=${encodeURIComponent(key)}`;
+        console.log('Fetching:', url);
+        status.textContent = 'Fetching data...';
+        
+        const res = await fetch(url);
+        let data;
+        try {
+          data = await res.json();
+        } catch (e) {
+          const raw = await res.text().catch(() => 'Could not read response');
+          data = { error: `Invalid JSON response: ${e.message}`, raw };
+        }
+        
+        console.log('Server response:', data);
+        
+        if (!res.ok) {
+          throw new Error(data.error || `Server returned status ${res.status}`);
+        }
+        
+        console.log('API Response:', data); // Debug log
+        
+        // Update UI with the new response format
+        totalEl.textContent = fmt(data.tokens?.total || 0);
+        inEl.textContent = fmt(data.tokens?.input || 0);
+        outEl.textContent = fmt(data.tokens?.output || 0);
+        reqEl.textContent = fmt(data.tokens?.requests || 0);
+        
+        // Handle budget display
+        const hasBudget = data.tokens?.budget !== null && data.tokens?.budget !== undefined;
+        remEl.textContent = hasBudget ? fmt(data.tokens.remaining) : 'No budget set';
+        
+        // Calculate usage percentage
+        const used = Number(data.tokens?.total || 0);
+        const budget = Number(data.tokens?.budget || 0);
+        const pct = budget > 0 ? Math.min(100, Math.round((used / budget) * 100)) : 0;
+        
+        // Update progress bar with color coding based on usage
+        progEl.style.width = pct + '%';
+        if (data.status?.isOverLimit) {
+          progEl.style.background = 'var(--danger)';
+        } else if (data.status?.isApproachingLimit) {
+          progEl.style.background = 'orange';
+        } else {
+          progEl.style.background = 'linear-gradient(90deg,#22d3ee,#22c55e)';
+        }
+        
+        // Show alert if approaching or over limits
+        const dailyPct = Math.round((data.rateLimits?.daily?.requests || 0) / (data.rateLimits?.daily?.maxRequests || 1) * 100);
+        const minutePct = Math.round((data.rateLimits?.minute?.requests || 0) / (data.rateLimits?.minute?.maxRequests || 1) * 100);
+        const tokenPct = budget ? Math.round((used / budget) * 100) : 0;
+        
+        // Show warning at 50% usage, stronger warning at 80%
+        if (data.status?.isOverLimit || dailyPct >= 80 || minutePct >= 80 || tokenPct >= 80) {
+          // CRITICAL WARNING (80%+ usage)
+          alertEl.style.display = 'block';
+          alertEl.className = 'card alert-warning';
+          alertEl.innerHTML = `
+            <div style="display: flex; align-items: center; margin-bottom: 8px;">
+              <span style="font-size: 24px; margin-right: 8px;">⚠️</span>
+              <span style="font-weight: bold; color: var(--danger);">API Key Approaching Limits</span>
+            </div>
+            <div style="margin-bottom: 12px; line-height: 1.5;">
+              Your API key is reaching critical usage levels. Please generate a new API key soon to avoid service interruption.
+            </div>
+            <div style="background: rgba(239, 68, 68, 0.1); padding: 10px; border-radius: 6px; margin-bottom: 12px;">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 0.9em;">
+                <span>Token Usage:</span>
+                <span>${used.toLocaleString()} / ${budget ? budget.toLocaleString() : '∞'} (${tokenPct}%)</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 0.9em;">
+                <span>Daily Requests:</span>
+                <span>${data.rateLimits?.daily?.requests || 0} / ${data.rateLimits?.daily?.maxRequests || 0} (${dailyPct}%)</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; font-size: 0.9em;">
+                <span>Minute Requests:</span>
+                <span>${data.rateLimits?.minute?.requests || 0} / ${data.rateLimits?.minute?.maxRequests || 0} (${minutePct}%)</span>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <a href="https://ai.google.dev/" target="_blank" 
+                 style="background: var(--danger); color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; display: inline-flex; align-items: center;">
+                🔑 Get New API Key
+              </a>
+              <span style="font-size: 0.85em; color: var(--muted);">
+                Next check in: <span id="countdown">30s</span>
+              </span>
+            </div>
+          `;
+        } else if (data.status?.isApproachingLimit || dailyPct >= 50 || minutePct >= 50 || tokenPct >= 50) {
+          // WARNING (50%+ usage)
+          alertEl.style.display = 'block';
+          alertEl.className = 'card';
+          alertEl.style.borderLeft = '4px solid orange';
+          alertEl.style.background = 'rgba(245, 158, 11, 0.05)';
+          alertEl.innerHTML = `
+            <div style="display: flex; align-items: center; margin-bottom: 8px;">
+              <span style="font-size: 20px; margin-right: 8px;">ℹ️</span>
+              <span style="font-weight: bold; color: orange;">Monitor API Usage</span>
+            </div>
+            <div style="margin-bottom: 12px; line-height: 1.5; font-size: 0.95em;">
+              Your API key is being actively used. Consider preparing a new key for rotation soon.
+            </div>
+            <div style="font-size: 0.9em; margin-bottom: 12px;">
+              <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span>Tokens Used:</span>
+                <span>${used.toLocaleString()} (${tokenPct}%)</span>
+              </div>
+              <div style="display: flex; justify-content: space-between;">
+                <span>Daily Requests:</span>
+                <span>${data.rateLimits?.daily?.requests || 0}/${data.rateLimits?.daily?.maxRequests || 0} (${dailyPct}%)</span>
+              </div>
+            </div>
+            <div style="text-align: right;">
+              <a href="https://ai.google.dev/" target="_blank" 
+                 style="color: var(--accent); text-decoration: none; font-size: 0.9em; display: inline-flex; align-items: center;">
+                Get API Key <span style="margin-left: 4px;">↗</span>
+              </a>
+            </div>
+          `;
+        } else {
+          alertEl.style.display = 'none';
+        }
+
+        // Update period info with rate limit status
+        const periodDate = data.tokens?.periodStart ? new Date(data.tokens.periodStart).toISOString().slice(0,10) : 'N/A';
+        periodEl.innerHTML = `
+          <div>Period start (UTC): ${periodDate} — Used: ${fmt(used)}${hasBudget ? ` / Budget: ${fmt(budget)} (${pct}%)` : ''}</div>
+          <div style="margin-top: 8px; font-size: 0.9em; color: ${data.status?.isOverLimit ? 'var(--danger)' : data.status?.isApproachingLimit ? 'orange' : 'var(--ok)'}">
+            ${data.status?.nextAction || 'Status: Normal'}
+          </div>
+          <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted)">
+            Rate limits: ${data.rateLimits?.minute?.requests || 0}/${data.rateLimits?.minute?.maxRequests || 0} req/min • 
+            ${data.rateLimits?.daily?.requests || 0}/${data.rateLimits?.daily?.maxRequests || 0} req/day
+          </div>
+        `;
+        
+        status.innerHTML = '<span class="ok">Usage data loaded successfully</span>';
+        
+      } catch (e) {
+        console.error('Error loading usage data:', e);
+        status.innerHTML = `<span class="warn">Error: ${e.message || 'Failed to load usage data'}</span>`;
+      }
+    }
+
+    document.getElementById('load').addEventListener('click', load);
+    document.getElementById('bookmark').addEventListener('click', ()=>{
+      const key = keyEl.value.trim();
+      if (!key) return;
+      const url = `${location.origin}/admin?key=${encodeURIComponent(key)}`;
+      history.replaceState(null,'',url);
+      alert('Bookmark this page to keep the key in the URL.');
+    });
+  </script>
+</body>
+</html>

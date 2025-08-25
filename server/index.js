@@ -23,7 +23,7 @@ Rules:
 
 Text:
 ${text}`;
-  const result = await generateWithGemini(instruction, { temperature: 0.0, maxOutputTokens: undefined });
+  const result = await trackAndGenerate(instruction, { temperature: 0.0, maxOutputTokens: undefined });
   // Post-process to enforce Urdu naming preference only for Urdu
   return /urdu/i.test(targetLang) ? enforceUrduJesus(result) : result;
 }
@@ -53,8 +53,103 @@ const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const fs = require('fs');
+const { createClient } = require('@vercel/kv');
 
 const app = express();
+
+// --- Admin/Usage config ---
+const ADMIN_DASHBOARD_KEY = process.env.ADMIN_DASHBOARD_KEY || '';
+const MONTHLY_TOKEN_BUDGET = Number(process.env.MONTHLY_TOKEN_BUDGET || 0); // optional, total tokens budget for month
+
+// Free tier limits (based on Gemini's free tier)
+const FREE_TIER_LIMITS = {
+  REQUESTS_PER_MINUTE: 60,          // 60 requests per minute
+  REQUESTS_PER_DAY: 1000,           // 1,000 requests per day
+  CHARACTERS_PER_MINUTE: 60000,     // 60,000 characters per minute
+  CHARACTERS_PER_DAY: 1000000,      // 1,000,000 characters per day
+};
+
+// Track usage for rate limiting and quota monitoring
+const usageTracking = {
+  currentMinute: Math.floor(Date.now() / 60000),
+  currentDay: new Date().toDateString(),
+  minuteCount: 0,
+  dayCount: 0,
+  minuteChars: 0,
+  dayChars: 0,
+  lastReset: Date.now(),
+
+  checkAndResetCounters() {
+    const now = Date.now();
+    const currentMinute = Math.floor(now / 60000);
+    const currentDay = new Date().toDateString();
+    
+    // Reset minute counters if needed
+    if (currentMinute !== this.currentMinute) {
+      this.currentMinute = currentMinute;
+      this.minuteCount = 0;
+      this.minuteChars = 0;
+      this.lastReset = now;
+    }
+    
+    // Reset daily counters if needed
+    if (currentDay !== this.currentDay) {
+      this.currentDay = currentDay;
+      this.dayCount = 0;
+      this.dayChars = 0;
+    }
+  },
+  
+  recordUsage(charCount) {
+    this.checkAndResetCounters();
+    this.minuteCount++;
+    this.dayCount++;
+    this.minuteChars += charCount;
+    this.dayChars += charCount;
+  },
+  
+  getUsageStatus() {
+    this.checkAndResetCounters();
+    const usageStatus = {
+      // Current minute rate limits
+      minuteRequests: this.minuteCount,
+      minuteLimit: FREE_TIER_LIMITS.REQUESTS_PER_MINUTE,
+      minuteChars: this.minuteChars,
+      charMinuteLimit: FREE_TIER_LIMITS.CHARACTERS_PER_MINUTE,
+      
+      // Daily rate limits
+      dailyRequests: this.dayCount,
+      dailyLimit: FREE_TIER_LIMITS.REQUESTS_PER_DAY,
+      dailyChars: this.dayChars,
+      charDailyLimit: FREE_TIER_LIMITS.CHARACTERS_PER_DAY,
+      dayCount: this.dayCount,
+      
+      // Status flags (50% buffer for warning, 80% for critical)
+      isApproachingLimit: (
+        this.dayCount >= (FREE_TIER_LIMITS.REQUESTS_PER_DAY * 0.5) ||
+        this.dayChars >= (FREE_TIER_LIMITS.CHARACTERS_PER_DAY * 0.5) ||
+        this.minuteCount >= (FREE_TIER_LIMITS.REQUESTS_PER_MINUTE * 0.5) ||
+        this.minuteChars >= (FREE_TIER_LIMITS.CHARACTERS_PER_MINUTE * 0.5)
+      ),
+      
+      isOverLimit: (
+        this.dayCount >= (FREE_TIER_LIMITS.REQUESTS_PER_DAY * 0.8) ||
+        this.dayChars >= (FREE_TIER_LIMITS.CHARACTERS_PER_DAY * 0.8) ||
+        this.minuteCount >= (FREE_TIER_LIMITS.REQUESTS_PER_MINUTE * 0.8) ||
+        this.minuteChars >= (FREE_TIER_LIMITS.CHARACTERS_PER_MINUTE * 0.8)
+      ),
+      
+      isCritical: (
+        this.dayCount >= FREE_TIER_LIMITS.REQUESTS_PER_DAY * 0.9 ||
+        this.dayChars >= FREE_TIER_LIMITS.CHARACTERS_PER_DAY * 0.9 ||
+        this.minuteCount >= FREE_TIER_LIMITS.REQUESTS_PER_MINUTE * 0.9 ||
+        this.minuteChars >= FREE_TIER_LIMITS.CHARACTERS_PER_MINUTE * 0.9
+      )
+    };
+    return usageStatus;
+  }
+};
 
 // Rate limiting middleware
 const limiter = rateLimit({
@@ -85,6 +180,92 @@ const DAILY_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 if (!global.__chapterSummaryCache) global.__chapterSummaryCache = new Map();
 if (!global.__chapterSummaryLocks) global.__chapterSummaryLocks = new Map();
 const CHAPTER_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// Initialize Vercel KV client
+const kv = createClient({
+  url: process.env.KV_REST_API_URL,
+  token: process.env.KV_REST_API_TOKEN,
+});
+
+// --- Persistent usage tracker using Vercel KV
+async function getUsage() {
+  try {
+    const usage = await kv.get('usage') || {
+      periodStart: getMonthStart(),
+      inputTokens: 0,
+      outputTokens: 0,
+      requests: 0
+    };
+    return usage;
+  } catch (error) {
+    console.error('KV get error:', error);
+    return {
+      periodStart: getMonthStart(),
+      inputTokens: 0,
+      outputTokens: 0,
+      requests: 0
+    };
+  }
+}
+
+async function updateUsage(updates) {
+  try {
+    const current = await getUsage();
+    const nowStart = getMonthStart();
+    
+    // Reset if new month
+    if (current.periodStart !== nowStart) {
+      current.periodStart = nowStart;
+      current.inputTokens = 0;
+      current.outputTokens = 0;
+      current.requests = 0;
+    }
+    
+    // Apply updates
+    if (updates.inputTokens) current.inputTokens += updates.inputTokens;
+    if (updates.outputTokens) current.outputTokens += updates.outputTokens;
+    if (updates.requests) current.requests += updates.requests;
+    
+    // Save back to KV with 30-day TTL
+    await kv.set('usage', current, { ex: 30 * 24 * 60 * 60 });
+    return current;
+  } catch (error) {
+    console.error('KV set error:', error);
+    return null;
+  }
+}
+
+function getMonthStart(d = new Date()) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1, 0, 0, 0, 0)).getTime();
+}
+
+// Count tokens via Gemini countTokens API
+async function countTokens(text) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
+  const model = 'models/gemini-1.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/${model}:countTokens?key=${apiKey}`;
+  const body = {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: String(text || '') }]
+      }
+    ]
+  };
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!resp.ok) {
+    // Fall back to rough estimate (4 chars per token) on failure
+    const rough = Math.ceil(String(text || '').length / 4);
+    return rough;
+  }
+  const data = await resp.json().catch(() => ({}));
+  return Number(data?.totalTokens || 0);
+}
 
 // Simple helper to call Gemini REST API with retries and timeout
 async function generateWithGemini(prompt, { temperature = 0.7, maxOutputTokens } = {}) {
@@ -158,6 +339,34 @@ async function generateWithGemini(prompt, { temperature = 0.7, maxOutputTokens }
   }
 
   throw lastErr || new Error('Gemini request failed');
+}
+
+// Wrapper to track token usage per request
+async function trackAndGenerate(prompt, opts = {}) {
+  let input = 0;
+  try {
+    input = await countTokens(prompt);
+  } catch (_) {
+    input = Math.ceil(String(prompt || '').length / 4);
+  }
+  
+  const text = await generateWithGemini(prompt, opts);
+  
+  let output = 0;
+  try {
+    output = await countTokens(text);
+  } catch (_) {
+    output = Math.ceil(String(text || '').length / 4);
+  }
+  
+  // Update usage in KV store
+  await updateUsage({
+    inputTokens: input,
+    outputTokens: output,
+    requests: 1
+  });
+  
+  return text;
 }
 
 // Canonical list of Bible books with chapter counts (for validation and normalization)
@@ -267,10 +476,18 @@ app.use(express.static(publicDir));
 console.log('Environment:', process.env.NODE_ENV || 'development');
 console.log('Serving static from:', publicDir);
 console.log('Gemini key configured:', process.env.GEMINI_API_KEY ? 'yes' : 'no');
+console.log('Admin dashboard enabled:', ADMIN_DASHBOARD_KEY ? 'yes' : 'no');
 
 // Root route - serve index.html
 app.get('/', (req, res) => {
   res.sendFile(path.join(publicDir, 'index.html'));
+});
+
+// Admin dashboard page (simple, static HTML)
+app.get('/admin', (req, res) => {
+  const adminFile = path.join(publicDir, 'admin.html');
+  if (fs.existsSync(adminFile)) return res.sendFile(adminFile);
+  res.status(404).send('Admin page not found');
 });
 
 // Health check (helps verify env and connectivity quickly)
@@ -279,8 +496,125 @@ app.get('/api/health', (req, res) => {
     ok: true,
     node: process.version,
     env: process.env.NODE_ENV || 'development',
-    geminiKeyConfigured: Boolean(process.env.GEMINI_API_KEY)
+    geminiKeyConfigured: Boolean(process.env.GEMINI_API_KEY),
+    adminKeyConfigured: Boolean(ADMIN_DASHBOARD_KEY),
+    adminKeyLength: ADMIN_DASHBOARD_KEY ? ADMIN_DASHBOARD_KEY.length : 0,
+    monthlyBudget: MONTHLY_TOKEN_BUDGET
   });
+});
+
+// Admin usage endpoint with free tier tracking
+app.get('/api/admin/usage', async (req, res) => {
+  try {
+    // Check admin key
+    if (!ADMIN_DASHBOARD_KEY) {
+      return res.status(403).json({ error: 'Admin dashboard not configured' });
+    }
+    
+    const key = (req.query.key || '').toString();
+    if (key !== ADMIN_DASHBOARD_KEY) {
+      return res.status(401).json({ error: 'Invalid admin key' });
+    }
+
+    // Get current usage status and KV store data
+    const [usageStatus, usage] = await Promise.all([
+      usageTracking.getUsageStatus(),
+      getUsage()
+    ]);
+    
+    const usedTokens = (usage.inputTokens || 0) + (usage.outputTokens || 0);
+    const budget = MONTHLY_TOKEN_BUDGET > 0 ? MONTHLY_TOKEN_BUDGET : null;
+    const remainingTokens = budget !== null ? Math.max(0, budget - usedTokens) : null;
+    
+    // Calculate time until next minute reset
+    const now = Date.now();
+    const nextMinute = Math.ceil(now / 60000) * 60000;
+    const secondsLeft = Math.ceil((nextMinute - now) / 1000);
+    const resetMins = Math.floor(secondsLeft / 60);
+    const resetSecs = secondsLeft % 60;
+    
+    // Calculate usage percentages for warnings
+    const dailyPct = Math.min(100, Math.round((usageStatus.dailyRequests / usageStatus.dailyLimit) * 100));
+    const minutePct = Math.min(100, Math.round((usageStatus.minuteRequests / usageStatus.minuteLimit) * 100));
+    const tokenPct = budget ? Math.min(100, Math.round((usedTokens / budget) * 100)) : 0;
+    
+    // Prepare response
+    const response = {
+      // Current token usage
+      tokens: {
+        input: usage.inputTokens || 0,
+        output: usage.outputTokens || 0,
+        total: usedTokens,
+        budget: budget,
+        remaining: remainingTokens,
+        periodStart: new Date(usage.periodStart).toISOString(),
+        requests: usage.requests || 0
+      },
+      
+      // Rate limit status
+      rateLimits: {
+        minute: {
+          requests: usageStatus.minuteRequests,
+          maxRequests: usageStatus.minuteLimit,
+          characters: usageStatus.minuteChars,
+          maxCharacters: usageStatus.charMinuteLimit,
+          resetsIn: `${resetMins}m ${resetSecs}s`,
+          percentage: minutePct
+        },
+        daily: {
+          requests: usageStatus.dailyRequests,
+          maxRequests: usageStatus.dailyLimit,
+          characters: usageStatus.dailyChars,
+          maxCharacters: usageStatus.charDailyLimit,
+          resetsAt: 'Midnight UTC',
+          percentage: dailyPct
+        },
+        tokens: {
+          used: usedTokens,
+          budget: budget,
+          remaining: remainingTokens,
+          percentage: tokenPct
+        }
+      },
+      
+      // Status indicators
+      status: {
+        isApproachingLimit: dailyPct >= 50 || minutePct >= 50 || tokenPct >= 50,
+        isOverLimit: dailyPct >= 80 || minutePct >= 80 || tokenPct >= 80,
+        isCritical: dailyPct >= 90 || minutePct >= 90 || tokenPct >= 90,
+        shouldRotateKey: dailyPct >= 70 || minutePct >= 70 || tokenPct >= 70,
+        
+        nextAction: (dailyPct >= 90 || minutePct >= 90 || tokenPct >= 90)
+          ? '⚠️ API key is near limits. Rotate key immediately.'
+          : (dailyPct >= 70 || minutePct >= 70 || tokenPct >= 70)
+            ? '⚠️ Approaching limits. Consider rotating your key soon.'
+            : (dailyPct >= 50 || minutePct >= 50 || tokenPct >= 50)
+              ? 'ℹ️ Usage is moderate. Monitor your usage.'
+              : '✅ Usage is within safe limits.'
+      },
+      
+      // Free tier information
+      freeTierLimits: FREE_TIER_LIMITS,
+      
+      // Last updated timestamp
+      timestamp: new Date().toISOString(),
+      
+      // Environment info (for debugging)
+      environment: process.env.NODE_ENV || 'development',
+      serverTime: new Date().toISOString()
+    };
+    
+    console.log('[/api/admin/usage] Sending usage data');
+    res.json(response);
+    
+  } catch (error) {
+    console.error('[/api/admin/usage] Error:', error);
+    res.status(500).json({ 
+      error: 'Internal server error', 
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
 });
 
 // Books and chapters for daily random summaries (subset drawing from canonical list)
@@ -325,13 +659,13 @@ app.post('/api/summarize', async (req, res) => {
       // Grounded prompt with strict instructions (English output)
       const prompt = `You are summarizing a Bible passage for a Christian audience. Use ONLY the passage text provided below.\n\n- Do NOT invent any content.\n- If you are unsure, say so.\n- Include verse citations using the format v<number> or v<number>-<number> referencing ONLY verses that exist in this chapter.\n- Keep 1–3 concise paragraphs focused on the main themes and lessons.\n- Translation: ${passage.meta.translation}.\n- Perspective and terminology: use a strictly Christian background and avoid Islamic/Muslim terminology or titles.\n\nPassage: ${normalizedBook} ${chapterNumber}\n${passage.passageText}`;
 
-      let summary = await generateWithGemini(prompt, { temperature: 0.2, maxOutputTokens: 320 });
+      let summary = await trackAndGenerate(prompt, { temperature: 0.2, maxOutputTokens: 320 });
 
       // Validate citations; if invalid, retry once with a stricter reminder
       const check = validateCitations(summary, passage.verses);
       if (!check.valid) {
         const retryPrompt = `${prompt}\n\nYour previous attempt referenced invalid verses (max is v${check.maxVerse}). Revise the summary so that any verse citations only reference existing verses.`;
-        summary = await generateWithGemini(retryPrompt, { temperature: 0.15, maxOutputTokens: 300 });
+        summary = await trackAndGenerate(retryPrompt, { temperature: 0.15, maxOutputTokens: 300 });
       }
 
       const citations = extractCitations(summary, passage.verses);
@@ -424,7 +758,7 @@ app.get('/api/daily-summary', async (req, res) => {
       const passage = await fetchBibleText(book, chapter, translation);
       const prompt = `Provide a concise, 1–2 paragraph daily insight strictly based on the passage below. Do NOT invent content. Include 0–2 verse citations using v<number> that exist in this chapter. Translation: ${passage.meta.translation}.\n- Perspective and terminology: use a strictly Christian background and avoid Islamic/Muslim terminology or titles.\n\nPassage: ${book} ${chapter}\n${passage.passageText}`;
       // To reduce API usage, attempt only once; skip validation retry for daily
-      let summary = await generateWithGemini(prompt, { temperature: 0.2, maxOutputTokens: 220 });
+      let summary = await trackAndGenerate(prompt, { temperature: 0.2, maxOutputTokens: 220 });
       const citations = extractCitations(summary, passage.verses);
 
       // Urdu translation for daily summary (best-effort)
