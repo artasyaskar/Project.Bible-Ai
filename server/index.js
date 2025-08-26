@@ -192,27 +192,57 @@ async function initRedis() {
     }
     
     console.log('Redis: Initializing Redis client...');
+    console.log('Redis: Using URL:', process.env.REDIS_URL);
+    
+    // Create Redis client with TLS options for secure connection
     redisClient = createClient({
-      url: process.env.REDIS_URL
+      url: process.env.REDIS_URL,
+      socket: {
+        tls: true,
+        rejectUnauthorized: false // Only for development with self-signed certs
+      }
     });
     
-    redisClient.on('error', (err) => console.error('Redis Client Error:', err));
+    // Error handling
+    redisClient.on('error', (err) => {
+      console.error('Redis Client Error:', err);
+    });
     
+    redisClient.on('connect', () => {
+      console.log('Redis: Connected to Redis server');
+    });
+    
+    redisClient.on('ready', () => {
+      console.log('Redis: Client is ready to use');
+    });
+    
+    redisClient.on('reconnecting', () => {
+      console.log('Redis: Reconnecting to Redis server...');
+    });
+    
+    // Connect to Redis
     await redisClient.connect();
-    console.log('Redis: Successfully connected to Redis');
     
     // Test connection
-    await redisClient.set('test_connection', 'ok', { EX: 10 });
-    const testValue = await redisClient.get('test_connection');
-    if (testValue === 'ok') {
-      console.log('Redis: Connection test successful');
-    } else {
-      console.error('Redis: Connection test failed - unexpected value');
+    try {
+      await redisClient.set('test_connection', 'ok', { EX: 10 });
+      const testValue = await redisClient.get('test_connection');
+      if (testValue === 'ok') {
+        console.log('Redis: Connection test successful');
+        return true;
+      } else {
+        console.error('Redis: Connection test failed - unexpected value');
+        return false;
+      }
+    } catch (testError) {
+      console.error('Redis: Connection test failed:', testError);
+      return false;
     }
-    
-    return true;
   } catch (error) {
     console.error('Redis: Failed to initialize:', error);
+    if (redisClient) {
+      await redisClient.quit().catch(e => console.error('Error closing Redis client:', e));
+    }
     return false;
   }
 }
@@ -649,8 +679,15 @@ app.get('/api/health', async (req, res) => {
     redis: {
       configured: Boolean(process.env.REDIS_URL),
       connected: false,
-      error: null
-    }
+      url: process.env.REDIS_URL ? 'configured' : 'not configured',
+      error: null,
+      clientStatus: redisClient ? {
+        isOpen: redisClient.isOpen,
+        isReady: redisClient.isReady,
+        isReconnecting: redisClient.isReconnecting
+      } : 'Redis client not initialized'
+    },
+    timestamp: new Date().toISOString()
   };
 
   // Test Redis connection if configured
@@ -661,8 +698,26 @@ app.get('/api/health', async (req, res) => {
       const value = await redisClient.get(testKey);
       health.redis.connected = value === 'test';
       await redisClient.del(testKey);
+      
+      // Get Redis info if connected
+      if (health.redis.connected) {
+        try {
+          const info = await redisClient.info();
+          health.redis.info = {
+            version: info.match(/redis_version:(.*)/)?.[1]?.trim(),
+            mode: info.match(/redis_mode:(.*)/)?.[1]?.trim(),
+            uptime: info.match(/uptime_in_seconds:(\d+)/)?.[1]
+          };
+        } catch (infoError) {
+          health.redis.infoError = 'Failed to get Redis info: ' + infoError.message;
+        }
+      }
+      
     } catch (error) {
-      health.redis.error = error.message;
+      health.redis.error = {
+        message: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      };
       health.ok = false;
     }
   }
@@ -670,9 +725,18 @@ app.get('/api/health', async (req, res) => {
   // If Redis is not configured, consider it a critical error
   if (!health.redis.configured) {
     health.ok = false;
-    health.redis.error = 'Redis not configured - check REDIS_URL environment variable';
+    health.redis.error = {
+      message: 'Redis not configured - check REDIS_URL environment variable',
+      help: 'Make sure REDIS_URL is set in your Vercel environment variables'
+    };
   } else if (!health.redis.connected) {
     health.ok = false;
+    if (!health.redis.error) {
+      health.redis.error = {
+        message: 'Redis connection failed',
+        help: 'Check if the Redis server is running and accessible'
+      };
+    }
   }
 
   res.status(health.ok ? 200 : 500).json(health);
