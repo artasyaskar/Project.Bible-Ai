@@ -13,7 +13,7 @@
   "routes": [
     { "handle": "filesystem" },
     {
-      "src": "/(api|admin)(/.*)?",
+      "src": "/api/(.*)",
       "dest": "server/index.js"
     },
     {
