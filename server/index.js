@@ -184,28 +184,52 @@ const CHAPTER_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // Initialize Redis client
 const { createClient } = require('redis');
 let redisClient;
+let redisReady = false;
 
 async function initRedis() {
   try {
     if (!process.env.REDIS_URL) {
-      throw new Error('REDIS_URL environment variable is not set');
+      console.error('Redis: REDIS_URL environment variable is not set');
+      return false;
     }
     
     console.log('Redis: Initializing Redis client...');
     console.log('Redis: Using URL:', process.env.REDIS_URL);
     
-    // Create Redis client with TLS options for secure connection
+    // Parse Redis URL to extract components
+    const redisUrl = new URL(process.env.REDIS_URL);
+    const useTLS = redisUrl.protocol === 'rediss:';
+    
+    // Create Redis client with proper configuration
     redisClient = createClient({
       url: process.env.REDIS_URL,
       socket: {
-        tls: true,
-        rejectUnauthorized: false // Only for development with self-signed certs
+        tls: useTLS,
+        rejectUnauthorized: false, // For self-signed certs
+        reconnectStrategy: (retries) => {
+          if (retries > 10) {
+            console.error('Redis: Too many retries, giving up');
+            return new Error('Too many retries');
+          }
+          // Reconnect after 1 second
+          return 1000;
+        }
+      },
+      pingInterval: 30000, // Send PING every 30 seconds
+      retryStrategy: (times) => {
+        if (times > 5) {
+          console.error('Redis: Max retries reached, giving up');
+          return null; // Stop retrying
+        }
+        // Exponential backoff
+        return Math.min(times * 1000, 5000);
       }
     });
     
-    // Error handling
+    // Event handlers
     redisClient.on('error', (err) => {
-      console.error('Redis Client Error:', err);
+      console.error('Redis Client Error:', err.message);
+      redisReady = false;
     });
     
     redisClient.on('connect', () => {
@@ -214,41 +238,48 @@ async function initRedis() {
     
     redisClient.on('ready', () => {
       console.log('Redis: Client is ready to use');
+      redisReady = true;
     });
     
     redisClient.on('reconnecting', () => {
       console.log('Redis: Reconnecting to Redis server...');
+      redisReady = false;
     });
     
-    // Connect to Redis
-    await redisClient.connect();
+    redisClient.on('end', () => {
+      console.log('Redis: Connection closed');
+      redisReady = false;
+    });
     
-    // Test connection
-    try {
-      await redisClient.set('test_connection', 'ok', { EX: 10 });
-      const testValue = await redisClient.get('test_connection');
-      if (testValue === 'ok') {
-        console.log('Redis: Connection test successful');
-        return true;
-      } else {
-        console.error('Redis: Connection test failed - unexpected value');
-        return false;
-      }
-    } catch (testError) {
-      console.error('Redis: Connection test failed:', testError);
-      return false;
-    }
+    // Connect to Redis with timeout
+    await Promise.race([
+      redisClient.connect(),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Redis connection timeout')), 5000)
+      )
+    ]);
+    
+    // Verify connection with a simple command
+    await redisClient.ping();
+    console.log('Redis: Successfully connected and pinged');
+    
+    return true;
+    
   } catch (error) {
-    console.error('Redis: Failed to initialize:', error);
+    console.error('Redis: Failed to initialize:', error.message);
     if (redisClient) {
-      await redisClient.quit().catch(e => console.error('Error closing Redis client:', e));
+      await redisClient.quit().catch(e => 
+        console.error('Error closing Redis client:', e.message)
+      );
     }
+    redisClient = null;
+    redisReady = false;
     return false;
   }
 }
 
 // Initialize Redis connection
-const redisReady = initRedis().catch(console.error);
+initRedis().catch(console.error);
 
 // --- Persistent usage tracker using Redis
 async function getUsage() {
@@ -693,32 +724,85 @@ app.get('/api/health', async (req, res) => {
   // Test Redis connection if configured
   if (health.redis.configured && redisClient) {
     try {
-      const testKey = 'health_check_' + Date.now();
-      await redisClient.set(testKey, 'test', { EX: 10 });
-      const value = await redisClient.get(testKey);
-      health.redis.connected = value === 'test';
-      await redisClient.del(testKey);
+      // Simple ping test
+      const pingResponse = await redisClient.ping();
+      health.redis.connected = pingResponse === 'PONG';
       
-      // Get Redis info if connected
       if (health.redis.connected) {
-        try {
-          const info = await redisClient.info();
-          health.redis.info = {
-            version: info.match(/redis_version:(.*)/)?.[1]?.trim(),
-            mode: info.match(/redis_mode:(.*)/)?.[1]?.trim(),
-            uptime: info.match(/uptime_in_seconds:(\d+)/)?.[1]
-          };
-        } catch (infoError) {
-          health.redis.infoError = 'Failed to get Redis info: ' + infoError.message;
+        // Test set/get operation
+        const testKey = 'health_check_' + Date.now();
+        await redisClient.set(testKey, 'test', { EX: 10 });
+        const value = await redisClient.get(testKey);
+        health.redis.connected = value === 'test';
+        
+        if (health.redis.connected) {
+          await redisClient.del(testKey);
+          
+          // Get Redis info
+          try {
+            const info = await redisClient.info();
+            health.redis.info = {
+              version: info.match(/redis_version:([^\r\n]+)/)?.[1]?.trim(),
+              mode: info.match(/redis_mode:([^\r\n]+)/)?.[1]?.trim() || 'unknown',
+              uptime: info.match(/uptime_in_seconds:(\d+)/)?.[1] || 'unknown',
+              connected_clients: info.match(/connected_clients:(\d+)/)?.[1] || 'unknown',
+              used_memory: info.match(/used_memory:(\w+)/)?.[1] || 'unknown',
+              total_connections_received: info.match(/total_connections_received:(\d+)/)?.[1] || 'unknown'
+            };
+          } catch (infoError) {
+            health.redis.infoError = 'Failed to get Redis info: ' + infoError.message;
+          }
         }
       }
       
     } catch (error) {
       health.redis.error = {
         message: error.message,
+        code: error.code,
+        syscall: error.syscall,
+        address: error.address,
+        port: error.port,
         stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
       };
       health.ok = false;
+      
+      // Add troubleshooting tips based on error
+      if (error.code === 'ECONNREFUSED') {
+        health.redis.troubleshooting = {
+          issue: 'Connection refused',
+          possibleCauses: [
+            'Redis server is not running',
+            'Incorrect host or port in REDIS_URL',
+            'Network connectivity issues',
+            'Firewall blocking the connection'
+          ]
+        };
+      } else if (error.code === 'ETIMEDOUT') {
+        health.redis.troubleshooting = {
+          issue: 'Connection timeout',
+          possibleCauses: [
+            'Redis server is overloaded',
+            'Network latency issues',
+            'Incorrect host or port in REDIS_URL'
+          ]
+        };
+      } else if (error.message.includes('WRONGPASS')) {
+        health.redis.troubleshooting = {
+          issue: 'Authentication failed',
+          possibleCauses: [
+            'Incorrect password in REDIS_URL',
+            'Redis requires authentication but no password was provided'
+          ]
+        };
+      } else if (error.message.includes('NOPERM')) {
+        health.redis.troubleshooting = {
+          issue: 'Permission denied',
+          possibleCauses: [
+            'The provided user does not have the required permissions',
+            'Incorrect username/password in REDIS_URL'
+          ]
+        };
+      }
     }
   }
 
@@ -727,15 +811,42 @@ app.get('/api/health', async (req, res) => {
     health.ok = false;
     health.redis.error = {
       message: 'Redis not configured - check REDIS_URL environment variable',
-      help: 'Make sure REDIS_URL is set in your Vercel environment variables'
+      help: 'Make sure REDIS_URL is set in your Vercel environment variables with format: redis[s]://[username:password@]host:port[/db-number]'
     };
   } else if (!health.redis.connected) {
     health.ok = false;
     if (!health.redis.error) {
       health.redis.error = {
         message: 'Redis connection failed',
-        help: 'Check if the Redis server is running and accessible'
+        help: 'Check if the Redis server is running and accessible',
+        troubleshooting: {
+          steps: [
+            'Verify the Redis server is running',
+            'Check the REDIS_URL format matches: redis[s]://[username:password@]host:port[/db-number]',
+            'Ensure the Redis server accepts connections from this application',
+            'Check if a firewall is blocking the connection',
+            'Verify the Redis server has enough resources (memory, connections)'
+          ]
+        }
       };
+    }
+  }
+
+  // Add Redis URL info (masking password for security)
+  if (process.env.REDIS_URL) {
+    try {
+      const url = new URL(process.env.REDIS_URL);
+      health.redis.url_info = {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port,
+        username: url.username || 'default',
+        password: url.password ? '***' + url.password.slice(-3) : 'none',
+        database: url.pathname ? url.pathname.replace(/\//g, '') : '0',
+        searchParams: Object.fromEntries(url.searchParams)
+      };
+    } catch (e) {
+      health.redis.url_parse_error = 'Invalid Redis URL format';
     }
   }
 
