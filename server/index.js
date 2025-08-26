@@ -181,43 +181,46 @@ if (!global.__chapterSummaryCache) global.__chapterSummaryCache = new Map();
 if (!global.__chapterSummaryLocks) global.__chapterSummaryLocks = new Map();
 const CHAPTER_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-// Initialize Vercel KV client
-let kv;
-try {
-  if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
-    console.error('KV: Missing required environment variables for KV store');
-    console.error('KV_REST_API_URL:', process.env.KV_REST_API_URL ? 'set' : 'missing');
-    console.error('KV_REST_API_TOKEN:', process.env.KV_REST_API_TOKEN ? 'set' : 'missing');
-  } else {
-    console.log('KV: Initializing KV store client...');
-    kv = createClient({
-      url: process.env.KV_REST_API_URL,
-      token: process.env.KV_REST_API_TOKEN,
-    });
-    console.log('KV: KV store client initialized');
+// Initialize Redis client
+const { createClient } = require('redis');
+let redisClient;
+
+async function initRedis() {
+  try {
+    if (!process.env.REDIS_URL) {
+      throw new Error('REDIS_URL environment variable is not set');
+    }
     
-    // Test KV connection
-    (async () => {
-      try {
-        const testKey = 'kv_health_check';
-        await kv.set(testKey, 'test', { ex: 60 });
-        const value = await kv.get(testKey);
-        if (value === 'test') {
-          console.log('KV: Successfully connected and verified KV store');
-        } else {
-          console.error('KV: KV store connection test failed - unexpected value');
-        }
-        await kv.del(testKey);
-      } catch (error) {
-        console.error('KV: KV store connection test failed:', error);
-      }
-    })();
+    console.log('Redis: Initializing Redis client...');
+    redisClient = createClient({
+      url: process.env.REDIS_URL
+    });
+    
+    redisClient.on('error', (err) => console.error('Redis Client Error:', err));
+    
+    await redisClient.connect();
+    console.log('Redis: Successfully connected to Redis');
+    
+    // Test connection
+    await redisClient.set('test_connection', 'ok', { EX: 10 });
+    const testValue = await redisClient.get('test_connection');
+    if (testValue === 'ok') {
+      console.log('Redis: Connection test successful');
+    } else {
+      console.error('Redis: Connection test failed - unexpected value');
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Redis: Failed to initialize:', error);
+    return false;
   }
-} catch (error) {
-  console.error('KV: Failed to initialize KV store client:', error);
 }
 
-// --- Persistent usage tracker using Vercel KV
+// Initialize Redis connection
+const redisReady = initRedis().catch(console.error);
+
+// --- Persistent usage tracker using Redis
 async function getUsage() {
   const defaultUsage = () => ({
     periodStart: getMonthStart(),
@@ -227,84 +230,101 @@ async function getUsage() {
     lastUpdated: Date.now()
   });
 
+  if (!redisClient || !redisClient.isReady) {
+    console.warn('Redis client not ready, returning default usage');
+    return defaultUsage();
+  }
+
   try {
-    console.log('KV: Fetching usage data from KV store...');
-    let usage = await kv.get('usage');
-    console.log('KV: Retrieved usage data:', JSON.stringify(usage, null, 2));
+    console.log('Redis: Fetching usage data...');
+    const usageStr = await redisClient.get('bibleai-kv:usage');
     
-    // If no usage data exists, initialize it
-    if (!usage || typeof usage !== 'object') {
-      console.log('KV: No existing usage data found, initializing...');
-      usage = defaultUsage();
-      console.log('KV: Initial usage data:', JSON.stringify(usage, null, 2));
-      await kv.set('usage', usage, { ex: 30 * 24 * 60 * 60 });
-      console.log('KV: Successfully initialized usage data');
-      return usage;
+    if (!usageStr) {
+      console.log('Redis: No existing usage data found, initializing...');
+      const initialUsage = defaultUsage();
+      await redisClient.set('bibleai-kv:usage', JSON.stringify(initialUsage), {
+        EX: 30 * 24 * 60 * 60 // 30 days TTL
+      });
+      console.log('Redis: Initialized new usage data');
+      return initialUsage;
     }
     
-    // Ensure all required fields exist
+    let usage;
+    try {
+      usage = JSON.parse(usageStr);
+    } catch (e) {
+      console.error('Redis: Failed to parse usage data:', e);
+      return defaultUsage();
+    }
+    
+    // Check if data is too old (older than 1 hour)
     const now = Date.now();
     const oneHour = 60 * 60 * 1000;
     
-    // If data is too old (older than 1 hour), log a warning but still return it
     if (now - (usage.lastUpdated || 0) > oneHour) {
-      console.warn('KV: Usage data is older than 1 hour, consider checking KV store health');
+      console.warn('Redis: Usage data is older than 1 hour, consider checking Redis health');
     }
     
-    // Return merged with defaults in case some fields are missing
+    // Ensure all required fields exist
     const mergedUsage = { ...defaultUsage(), ...usage };
-    console.log('KV: Returning merged usage data:', JSON.stringify(mergedUsage, null, 2));
+    console.log('Redis: Returning merged usage data');
     return mergedUsage;
     
   } catch (error) {
-    console.error('KV: Error in getUsage:', error);
-    // Return default values if there's an error
-    const fallback = defaultUsage();
-    console.log('KV: Returning fallback usage data due to error:', JSON.stringify(fallback, null, 2));
-    return fallback;
+    console.error('Redis: Error in getUsage:', error);
+    return defaultUsage();
   }
 }
 
 async function updateUsage(updates) {
-  const LOCK_KEY = 'usage:lock';
+  const LOCK_KEY = 'bibleai-kv:usage:lock';
   const LOCK_TTL = 5; // 5 seconds lock
   const MAX_RETRIES = 3;
   let retries = 0;
   
-  console.log('KV: Starting updateUsage with updates:', JSON.stringify(updates, null, 2));
+  if (!redisClient || !redisClient.isReady) {
+    console.warn('Redis client not ready, skipping usage update');
+    return null;
+  }
+  
+  console.log('Redis: Starting updateUsage with updates:', JSON.stringify(updates, null, 2));
 
   while (retries < MAX_RETRIES) {
     try {
-      console.log(`KV: [Attempt ${retries + 1}] Trying to acquire lock...`);
-      const lockAcquired = await kv.set(LOCK_KEY, '1', { nx: true, ex: LOCK_TTL });
+      // Try to acquire a lock using SET with NX and EX options
+      console.log(`Redis: [Attempt ${retries + 1}] Trying to acquire lock...`);
+      const lockAcquired = await redisClient.set(LOCK_KEY, '1', {
+        NX: true,
+        EX: LOCK_TTL
+      });
       
-      if (!lockAcquired) {
-        console.log(`KV: [Attempt ${retries + 1}] Lock not acquired, waiting...`);
+      if (lockAcquired !== 'OK') {
+        console.log(`Redis: [Attempt ${retries + 1}] Lock not acquired, waiting...`);
         await new Promise(resolve => setTimeout(resolve, 100));
         retries++;
         continue;
       }
       
-      console.log(`KV: [Attempt ${retries + 1}] Lock acquired`);
+      console.log(`Redis: [Attempt ${retries + 1}] Lock acquired`);
 
       try {
         // Get current usage with fresh data
-        console.log('KV: Fetching current usage...');
+        console.log('Redis: Fetching current usage...');
         const current = await getUsage();
-        console.log('KV: Current usage before update:', JSON.stringify(current, null, 2));
+        console.log('Redis: Current usage before update:', JSON.stringify(current, null, 2));
         
         const nowStart = getMonthStart();
         
         // Reset if new month
         if (current.periodStart !== nowStart) {
-          console.log('KV: New month detected, resetting counters');
+          console.log('Redis: New month detected, resetting counters');
           current.periodStart = nowStart;
           current.inputTokens = 0;
           current.outputTokens = 0;
           current.requests = 0;
         }
         
-        // Apply updates atomically
+        // Apply updates
         const updated = {
           ...current,
           inputTokens: (current.inputTokens || 0) + (updates.inputTokens || 0),
@@ -313,37 +333,41 @@ async function updateUsage(updates) {
           lastUpdated: Date.now()
         };
         
-        console.log('KV: Updated usage data:', JSON.stringify(updated, null, 2));
+        console.log('Redis: Updated usage data:', JSON.stringify(updated, null, 2));
         
-        // Save back to KV with 30-day TTL
-        console.log('KV: Saving updated usage to KV store...');
-        await kv.set('usage', updated, { ex: 30 * 24 * 60 * 60 });
-        console.log('KV: Successfully saved updated usage data');
+        // Save back to Redis with 30-day TTL
+        console.log('Redis: Saving updated usage...');
+        await redisClient.set('bibleai-kv:usage', JSON.stringify(updated), {
+          EX: 30 * 24 * 60 * 60 // 30 days
+        });
         
+        console.log('Redis: Successfully saved updated usage data');
         return updated;
+        
       } finally {
         // Always release the lock
-        console.log('KV: Releasing lock...');
-        await kv.del(LOCK_KEY);
-        console.log('KV: Lock released');
+        console.log('Redis: Releasing lock...');
+        await redisClient.del(LOCK_KEY);
+        console.log('Redis: Lock released');
       }
+      
     } catch (error) {
-      console.error(`KV: Error in updateUsage (attempt ${retries + 1}):`, error);
+      console.error(`Redis: Error in updateUsage (attempt ${retries + 1}):`, error);
       retries++;
       
       if (retries >= MAX_RETRIES) {
-        console.error('KV: Max retries reached in updateUsage');
+        console.error('Redis: Max retries reached in updateUsage');
         throw error;
       }
       
       // Exponential backoff
       const backoff = 100 * Math.pow(2, retries);
-      console.log(`KV: Retrying in ${backoff}ms...`);
+      console.log(`Redis: Retrying in ${backoff}ms...`);
       await new Promise(resolve => setTimeout(resolve, backoff));
     }
   }
   
-  console.error('KV: Failed to update usage after all retries');
+  console.error('Redis: Failed to update usage after all retries');
   return null;
 }
 
@@ -622,32 +646,32 @@ app.get('/api/health', async (req, res) => {
     adminKeyConfigured: Boolean(ADMIN_DASHBOARD_KEY),
     adminKeyLength: ADMIN_DASHBOARD_KEY ? ADMIN_DASHBOARD_KEY.length : 0,
     monthlyBudget: MONTHLY_TOKEN_BUDGET,
-    kvStore: {
-      configured: !!(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN),
+    redis: {
+      configured: Boolean(process.env.REDIS_URL),
       connected: false,
       error: null
     }
   };
 
-  // Test KV connection if configured
-  if (health.kvStore.configured && kv) {
+  // Test Redis connection if configured
+  if (health.redis.configured && redisClient) {
     try {
       const testKey = 'health_check_' + Date.now();
-      await kv.set(testKey, 'test', { ex: 10 });
-      const value = await kv.get(testKey);
-      health.kvStore.connected = value === 'test';
-      await kv.del(testKey);
+      await redisClient.set(testKey, 'test', { EX: 10 });
+      const value = await redisClient.get(testKey);
+      health.redis.connected = value === 'test';
+      await redisClient.del(testKey);
     } catch (error) {
-      health.kvStore.error = error.message;
+      health.redis.error = error.message;
       health.ok = false;
     }
   }
 
-  // If KV is not configured, consider it a critical error
-  if (!health.kvStore.configured) {
+  // If Redis is not configured, consider it a critical error
+  if (!health.redis.configured) {
     health.ok = false;
-    health.kvStore.error = 'KV store not configured - check KV_REST_API_URL and KV_REST_API_TOKEN';
-  } else if (!health.kvStore.connected) {
+    health.redis.error = 'Redis not configured - check REDIS_URL environment variable';
+  } else if (!health.redis.connected) {
     health.ok = false;
   }
 
