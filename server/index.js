@@ -181,107 +181,95 @@ if (!global.__chapterSummaryCache) global.__chapterSummaryCache = new Map();
 if (!global.__chapterSummaryLocks) global.__chapterSummaryLocks = new Map();
 const CHAPTER_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-// Initialize Redis client
-const { createClient } = require('redis');
-let redisClient;
+// In-memory storage fallback
+const memoryStore = {
+  usage: {
+    periodStart: getMonthStart(),
+    inputTokens: 0,
+    outputTokens: 0,
+    requests: 0,
+    lastUpdated: Date.now()
+  }
+};
+
+// Initialize Redis client (optional)
+let redisClient = null;
 let redisReady = false;
 
 async function initRedis() {
   try {
     if (!process.env.REDIS_URL) {
-      console.error('Redis: REDIS_URL environment variable is not set');
+      console.warn('Redis: REDIS_URL environment variable is not set - using in-memory storage');
       return false;
     }
     
     console.log('Redis: Initializing Redis client...');
     console.log('Redis: Using URL:', process.env.REDIS_URL);
     
-    // Parse Redis URL to extract components
+    const { createClient } = require('redis');
     const redisUrl = new URL(process.env.REDIS_URL);
     const useTLS = redisUrl.protocol === 'rediss:';
     
-    // Create Redis client with proper configuration
     redisClient = createClient({
       url: process.env.REDIS_URL,
       socket: {
         tls: useTLS,
-        rejectUnauthorized: false, // For self-signed certs
+        rejectUnauthorized: false,
         reconnectStrategy: (retries) => {
-          if (retries > 10) {
-            console.error('Redis: Too many retries, giving up');
-            return new Error('Too many retries');
+          if (retries > 5) {
+            console.error('Redis: Too many retries, falling back to in-memory storage');
+            return new Error('Max retries reached');
           }
-          // Reconnect after 1 second
-          return 1000;
+          return Math.min(retries * 1000, 5000);
         }
-      },
-      pingInterval: 30000, // Send PING every 30 seconds
-      retryStrategy: (times) => {
-        if (times > 5) {
-          console.error('Redis: Max retries reached, giving up');
-          return null; // Stop retrying
-        }
-        // Exponential backoff
-        return Math.min(times * 1000, 5000);
       }
     });
     
-    // Event handlers
     redisClient.on('error', (err) => {
       console.error('Redis Client Error:', err.message);
       redisReady = false;
     });
     
-    redisClient.on('connect', () => {
-      console.log('Redis: Connected to Redis server');
-    });
-    
+    redisClient.on('connect', () => console.log('Redis: Connected to Redis server'));
     redisClient.on('ready', () => {
       console.log('Redis: Client is ready to use');
       redisReady = true;
     });
     
-    redisClient.on('reconnecting', () => {
-      console.log('Redis: Reconnecting to Redis server...');
-      redisReady = false;
-    });
+    await redisClient.connect();
     
-    redisClient.on('end', () => {
-      console.log('Redis: Connection closed');
-      redisReady = false;
-    });
-    
-    // Connect to Redis with timeout
-    await Promise.race([
-      redisClient.connect(),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Redis connection timeout')), 5000)
-      )
-    ]);
-    
-    // Verify connection with a simple command
+    // Test connection
     await redisClient.ping();
     console.log('Redis: Successfully connected and pinged');
+    
+    // Migrate in-memory data to Redis if needed
+    if (memoryStore.usage) {
+      await updateRedisUsage(memoryStore.usage);
+    }
     
     return true;
     
   } catch (error) {
-    console.error('Redis: Failed to initialize:', error.message);
+    console.error('Redis: Failed to initialize, using in-memory storage:', error.message);
     if (redisClient) {
-      await redisClient.quit().catch(e => 
-        console.error('Error closing Redis client:', e.message)
-      );
+      await redisClient.quit().catch(console.error);
+      redisClient = null;
     }
-    redisClient = null;
-    redisReady = false;
     return false;
   }
 }
 
-// Initialize Redis connection
-initRedis().catch(console.error);
+// Initialize Redis in the background (non-blocking)
+if (process.env.REDIS_URL) {
+  initRedis().catch(err => {
+    console.error('Redis initialization failed, using in-memory storage:', err.message);
+  });
+} else {
+  console.warn('Redis: No REDIS_URL provided, using in-memory storage');
+}
 
-// --- Persistent usage tracker using Redis
+// Helper function to update Redis usage
+async function updateRedisUsage(usage) {
 async function getUsage() {
   const defaultUsage = () => ({
     periodStart: getMonthStart(),
@@ -291,9 +279,10 @@ async function getUsage() {
     lastUpdated: Date.now()
   });
 
-  if (!redisClient || !redisClient.isReady) {
-    console.warn('Redis client not ready, returning default usage');
-    return defaultUsage();
+  // If Redis is not available, use in-memory storage
+  if (!redisClient || !redisReady) {
+    console.warn('Redis not available, using in-memory storage for usage tracking');
+    return memoryStore.usage || defaultUsage();
   }
 
   try {
