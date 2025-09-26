@@ -93,7 +93,7 @@ async function generateWithGemini(prompt, { temperature = 0.7, maxOutputTokens }
     throw new Error('GEMINI_API_KEY is not set');
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${apiKey}`;
 
   const body = {
     contents: [
